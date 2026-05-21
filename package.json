@@ -11,9 +11,11 @@
     "build": "pnpm --filter @dispatch/db build && pnpm --filter @dispatch/core build && pnpm --filter @dispatch/web build && pnpm --filter @dispatch/api build && pnpm --filter @dispatch/mcp build",
     "typecheck": "pnpm --filter @dispatch/db typecheck && pnpm --filter @dispatch/core typecheck && pnpm --filter @dispatch/web typecheck && pnpm --filter @dispatch/api typecheck && pnpm --filter @dispatch/mcp typecheck",
     "lint": "eslint .",
-    "test": "pnpm -r test"
+    "test": "pnpm -r test",
+    "e2e": "playwright test"
   },
   "devDependencies": {
+    "@playwright/test": "^1.45.0",
     "@typescript-eslint/eslint-plugin": "^8.0.0",
     "@typescript-eslint/parser": "^8.0.0",
     "eslint": "^9.0.0",

@@ -1,0 +1,35 @@
+
+> dispatch@0.0.0 e2e /Users/cody/boolean-knowledge/builds/team-dispatch
+> playwright test
+
+
+Running 26 tests using 1 worker
+
+  ✓   1 [chromium] › e2e/tests/density-toggle.spec.ts:18:3 › Density toggle › data-density="compact" is the default on <body> (285ms)
+  ✓   2 [chromium] › e2e/tests/density-toggle.spec.ts:24:3 › Density toggle › density attribute is present on <body> (either compact or comfortable) (249ms)
+  ✓   3 [chromium] › e2e/tests/internal-thread.spec.ts:27:3 › Internal Thread — OQ-3 dispatch-native › Internal thread tab is clickable and switches view (1.7s)
+  ✓   4 [chromium] › e2e/tests/internal-thread.spec.ts:39:3 › Internal Thread — OQ-3 dispatch-native › internal thread messages render without a #channel-name Slack tag (OQ-3) (1.7s)
+  ✓   5 [chromium] › e2e/tests/internal-thread.spec.ts:55:3 › Internal Thread — OQ-3 dispatch-native › Internal thread tab button itself does not have a Slack channel src-tag (1.5s)
+  ✓   6 [chromium] › e2e/tests/internal-thread.spec.ts:65:3 › Internal Thread — OQ-3 dispatch-native › internal thread area renders when the tab is active (dispatch-native component mounts) (1.6s)
+  ✓   7 [chromium] › e2e/tests/issues-board.spec.ts:34:3 › Issues Board › renders six kanban columns in the correct plan order (259ms)
+  ✓   8 [chromium] › e2e/tests/issues-board.spec.ts:48:3 › Issues Board › rail renders the saved-views section (245ms)
+  ✓   9 [chromium] › e2e/tests/issues-board.spec.ts:61:3 › Issues Board › topbar renders filter chips, sort chip, and New-ticket button (253ms)
+  ✓  10 [chromium] › e2e/tests/issues-board.spec.ts:86:3 › Issues Board › status bar renders ticket counts and last-sync label (232ms)
+  ✓  11 [chromium] › e2e/tests/issues-board.spec.ts:96:3 › Issues Board › Type filter chip click opens dropdown with type options (270ms)
+  ✓  12 [chromium] › e2e/tests/issues-board.spec.ts:112:3 › Issues Board › Sort chip click opens menu and selecting Oldest first updates the chip label (227ms)
+  ✓  13 [chromium] › e2e/tests/route-stubs.spec.ts:24:3 › Settings stub page (Surface 4) › rail renders with Settings nav item highlighted and Configure sub-nav (238ms)
+  ✓  14 [chromium] › e2e/tests/route-stubs.spec.ts:43:3 › Settings stub page (Surface 4) › topbar shows Settings screen title (218ms)
+  ✓  15 [chromium] › e2e/tests/route-stubs.spec.ts:53:3 › Settings stub page (Surface 4) › does NOT render the full Trigger rule builder (deferred) (227ms)
+  ✓  16 [chromium] › e2e/tests/route-stubs.spec.ts:71:3 › Analytics stub page (Surface 5) › rail renders with Analytics nav item highlighted and Dashboards sub-nav (238ms)
+  ✓  17 [chromium] › e2e/tests/route-stubs.spec.ts:87:3 › Analytics stub page (Surface 5) › topbar shows Analytics screen title (222ms)
+  ✓  18 [chromium] › e2e/tests/route-stubs.spec.ts:96:3 › Analytics stub page (Surface 5) › does NOT render Phase-4 chart elements (charts deferred to Phase 4) (215ms)
+  ✓  19 [chromium] › e2e/tests/ticket-detail.spec.ts:26:3 › Ticket Detail — fixture path › four-column layout is present (1.5s)
+  ✓  20 [chromium] › e2e/tests/ticket-detail.spec.ts:34:3 › Ticket Detail — fixture path › header shows the ticket ID and a title (1.5s)
+  ✓  21 [chromium] › e2e/tests/ticket-detail.spec.ts:47:3 › Ticket Detail — fixture path › tabs bar shows Chat, Internal thread, and Linked tabs (1.5s)
+  ✓  22 [chromium] › e2e/tests/ticket-detail.spec.ts:62:3 › Ticket Detail — fixture path › chat thread renders messages (1.5s)
+  ✓  23 [chromium] › e2e/tests/ticket-detail.spec.ts:71:3 › Ticket Detail — fixture path › composer shows Send & resolve and Send & keep open buttons (1.5s)
+  ✓  24 [chromium] › e2e/tests/ticket-detail.spec.ts:84:3 › Ticket Detail — fixture path › right panel shows Ticket & client panel by default (1.6s)
+  ✓  25 [chromium] › e2e/tests/ticket-detail.spec.ts:94:3 › Ticket Detail — fixture path › RToolbar shows Info + Activity icons but NOT a terminal/claude-code icon (1.5s)
+  ✓  26 [chromium] › e2e/tests/ticket-detail.spec.ts:110:3 › Ticket Detail — fixture path › Phase-3 exclusions: no clock-in or billable controls in the header (1.5s)
+
+  26 passed (23.2s)
