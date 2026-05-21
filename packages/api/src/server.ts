@@ -27,6 +27,7 @@ import messageRoutes from "./routes/messages.js";
 import internalThreadRoutes from "./routes/internal-thread.js";
 import reassignmentRoutes from "./routes/reassignment.js";
 import reinforcementRoutes from "./routes/reinforcements.js";
+import mcpRoutes from "./routes/mcp.js";
 import { startOutboxWorker } from "./jobs/outbox-worker.js";
 import { startSlaTimer } from "./jobs/sla-timer.js";
 import type { Db } from "@dispatch/db";
@@ -69,6 +70,8 @@ export async function buildServer(opts: BuildServerOptions = {}) {
   await fastify.register(internalThreadRoutes);
   await fastify.register(reassignmentRoutes);
   await fastify.register(reinforcementRoutes);
+  // Slice 8 — MCP-facing read routes (machine-credential auth, class d)
+  await fastify.register(mcpRoutes);
 
   // ── Health check ─────────────────────────────────────────────────────────────
   fastify.get("/health", async () => ({ ok: true }));

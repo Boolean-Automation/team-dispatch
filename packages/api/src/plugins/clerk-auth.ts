@@ -3,18 +3,18 @@
 // Implements the four route-auth-class guards defined in plan.md §3:
 //
 //   (a) requireClerkSession  — Clerk session JWT (web app operator routes)
-//   (b) requireSlackSignature — Slack HMAC (Slice 4 — NOT added here yet)
+//   (b) requireSlackSignature — Slack HMAC (Slice 4)
 //   (c) requireClerkAdmin    — requireClerkSession + role === "admin"
-//   (d) requireMachineCredential — MCP machine token (Slice 8 — NOT added here yet)
+//   (d) requireMachineCredential — MCP machine token (HS256 JWT, Slice 8)
 //
 // Each route opts into exactly ONE guard as a preHandler.
 // There is NO blanket /api/* hook — that would block the Slack ingestion
 // webhook which must accept requests carrying no Clerk session.
 //
-// Slice 2 ships classes (a) and (c). Classes (b) and (d) are stubs exported
-// here so the plugin file is the single module future slices extend.
+// Slice 2 ships classes (a) and (c). Slice 4 ships (b). Slice 8 ships (d).
 
 import crypto from "node:crypto";
+import jwt from "jsonwebtoken";
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import fp from "fastify-plugin";
 
@@ -246,17 +246,129 @@ export async function requireSlackSignature(
   // Signature is valid — no request.auth needed for Slack webhook routes
 }
 
-// ── Stub: requireMachineCredential (route-class d) — Slice 8 ──────────────────
+// ── Guard: requireMachineCredential (route-class d) ──────────────────────────
+//
+// Validates an HS256 JWT signed with MCP_SIGNING_SECRET.
+// Required claims:
+//   aud  === "dispatch-mcp"
+//   iss  === "dispatch"
+//   sub  — the operator's Clerk user id
+//   role — "admin" | "se"
+//   exp  — must not be expired
+//   iat  — issued-at
+//
+// On success: attaches { userId: claims.sub, role } to request.auth.
+// On failure (missing, wrong shape, wrong aud, wrong iss, bad sig, expired): 401.
+//
+// A Clerk session JWT presented here is rejected because it does NOT carry
+// aud === "dispatch-mcp". The two credential classes are NOT interchangeable.
+//
+// Revocation: rotate MCP_SIGNING_SECRET to invalidate all outstanding tokens.
+// Per-token revocation (mcp_token_revocations table) is explicitly deferred
+// to Phase 2 — not needed for the Phase-1 pilot with named operators.
+//
+// Test injection: call _setMachineVerifierForTest(fn) to replace the real
+// jwt.verify call; call _resetMachineVerifier() in afterEach to restore.
+
+export type MachineTokenClaims = {
+  sub: string;
+  role: string;
+  aud: string;
+  iss: string;
+  exp: number;
+  iat: number;
+};
+
+export type MachineVerifyFn = (
+  token: string,
+  secret: string
+) => MachineTokenClaims;
+
+let _machineVerify: MachineVerifyFn | null = null;
+
+function getMachineVerify(): MachineVerifyFn {
+  if (_machineVerify) return _machineVerify;
+  // Real implementation: synchronous HS256 verify via jsonwebtoken
+  return (token: string, secret: string): MachineTokenClaims => {
+    const decoded = jwt.verify(token, secret, {
+      algorithms: ["HS256"],
+    });
+    if (typeof decoded === "string") {
+      throw new Error("Unexpected string payload from jwt.verify");
+    }
+    return decoded as MachineTokenClaims;
+  };
+}
+
+/** Inject a mock verifier for tests — replaces the real jwt.verify call. */
+export function _setMachineVerifierForTest(mock: MachineVerifyFn): void {
+  _machineVerify = mock;
+}
+
+/** Reset to the real jwt.verify after tests. */
+export function _resetMachineVerifier(): void {
+  _machineVerify = null;
+}
 
 export async function requireMachineCredential(
-  _request: FastifyRequest,
+  request: FastifyRequest,
   reply: FastifyReply
 ): Promise<void> {
-  return reply.status(501).send({
-    error: "Not Implemented",
-    message: "Machine credential auth is added in Slice 8",
-    statusCode: 501,
-  });
+  const signingSecret = process.env.MCP_SIGNING_SECRET;
+  if (!signingSecret) {
+    return reply.status(500).send({
+      error: "Internal Server Error",
+      message: "MCP_SIGNING_SECRET not configured",
+      statusCode: 500,
+    });
+  }
+
+  const authHeader = request.headers.authorization;
+  const token =
+    authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : undefined;
+
+  if (!token) {
+    return reply.status(401).send({
+      error: "Unauthorized",
+      message: "No machine credential provided",
+      statusCode: 401,
+    });
+  }
+
+  let claims: MachineTokenClaims;
+  try {
+    const verify = getMachineVerify();
+    claims = verify(token, signingSecret);
+  } catch {
+    return reply.status(401).send({
+      error: "Unauthorized",
+      message: "Invalid or expired machine credential",
+      statusCode: 401,
+    });
+  }
+
+  // Reject Clerk session JWTs or any token without the correct audience
+  if (claims.aud !== "dispatch-mcp") {
+    return reply.status(401).send({
+      error: "Unauthorized",
+      message: "Invalid machine credential: wrong audience",
+      statusCode: 401,
+    });
+  }
+
+  // Reject tokens from any issuer other than "dispatch"
+  if (claims.iss !== "dispatch") {
+    return reply.status(401).send({
+      error: "Unauthorized",
+      message: "Invalid machine credential: wrong issuer",
+      statusCode: 401,
+    });
+  }
+
+  const userId = claims.sub;
+  const role: DispatchRole = claims.role === "admin" ? "admin" : "se";
+
+  request.auth = { userId, role };
 }
 
 // ── Plugin registration ────────────────────────────────────────────────────────

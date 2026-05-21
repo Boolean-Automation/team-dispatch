@@ -1,0 +1,122 @@
+dispatch Slice 8 — L1 test evidence
+Generated: 2026-05-21
+
+=== pnpm --filter @dispatch/core test ===
+
+> @dispatch/core@0.0.0 test /Users/cody/boolean-knowledge/builds/team-dispatch/packages/core
+> vitest run
+
+ RUN  v2.1.9
+
+ ✓ test/undo-service.test.ts (5 tests)
+ ✓ test/effort-service.test.ts (6 tests)
+ ✓ test/routing.test.ts (2 tests)
+ ✓ test/ticket-service.test.ts (6 tests)
+ (+ 14 additional test files)
+
+ Test Files  18 passed (18)
+      Tests  186 passed (186)
+
+Baseline unchanged: 186/186.
+
+=== pnpm --filter @dispatch/api test ===
+
+> @dispatch/api@0.0.0 test /Users/cody/boolean-knowledge/builds/team-dispatch/packages/api
+> vitest run
+
+ RUN  v2.1.9
+
+ ✓ test/clerk-auth.test.ts (8 tests) 126ms
+ ✓ test/ingestion.test.ts (9 tests) 206ms
+ ✓ test/messages.test.ts (9 tests) 271ms
+ ✓ test/tickets.test.ts (7 tests) 318ms
+ ✓ test/machine-auth.test.ts (11 tests) 326ms   ← Slice 8: machine-auth 4-case suite
+ ✓ test/reassignment.test.ts (8 tests) 351ms
+ ✓ test/status-ladder.test.ts (14 tests) 455ms
+
+ Test Files  7 passed (7)
+      Tests  66 passed (66)
+
+Baseline +11 (55 → 66): machine-auth.test.ts 11 tests all green.
+
+=== machine-auth.test.ts — 4-case auth-class separation proof ===
+
+Suite: requireMachineCredential — MCP routes
+  ✓ returns 401 when no Authorization header is present
+    → Case 1: no credential → 401
+  ✓ returns 401 when a Clerk browser session JWT is presented on an MCP route
+    → Case 2: browser session JWT on MCP route → 401 (wrong aud: "dispatch" ≠ "dispatch-mcp")
+  ✓ returns 200 with correct payload when a valid machine token is presented
+    → Case 3: valid machine token → 200
+  ✓ returns 200 for admin machine token as well
+  ✓ returns 401 when machine token has invalid signature
+
+Suite: machine credential is rejected on session routes
+  ✓ returns 401 when a machine token is presented on a Clerk session route
+    → Case 4: machine token on session route → 401 (Clerk guard rejects non-Clerk token)
+
+Suite: MCP route structure
+  ✓ GET /api/mcp/tickets returns array with valid machine token
+  ✓ GET /api/mcp/accounts returns array with valid machine token
+  ✓ GET /api/mcp/tickets/:id returns 404 for unknown UUID
+  ✓ GET /api/mcp/accounts/:id returns 404 for unknown UUID
+  ✓ GET /api/mcp/tickets/:id with DSP- display id returns 404 for unknown
+
+AUTH-CLASS PROOF: The Clerk session credential and the machine credential are
+mutually non-interchangeable. A browser session JWT on an MCP route is rejected
+(aud claim is "dispatch" not "dispatch-mcp"). A machine token on a session
+route is rejected (Clerk SDK verifier rejects non-Clerk JWT format).
+
+=== pnpm --filter @dispatch/mcp test ===
+
+> @dispatch/mcp@0.0.0 test /Users/cody/boolean-knowledge/builds/team-dispatch/packages/mcp
+> vitest run
+
+ RUN  v2.1.9
+
+ ✓ test/tools.test.ts (13 tests) 3ms
+
+ Test Files  1 passed (1)
+      Tests  13 passed (13)
+
+=== pnpm typecheck (all 5 packages) ===
+
+ ✓ @dispatch/db typecheck
+ ✓ @dispatch/core typecheck
+ ✓ @dispatch/web typecheck
+ ✓ @dispatch/api typecheck
+ ✓ @dispatch/mcp typecheck
+
+=== pnpm lint ===
+
+Clean (no errors or warnings from dispatch source files)
+
+=== mint-token demo ===
+
+Command:
+  MCP_SIGNING_SECRET=test-secret pnpm --filter @dispatch/mcp mint-token --user user_test_demo --role se
+
+Output (JWT):
+  eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyX3Rlc3RfZGVtbyIsInJvbGUiOiJzZSIsImF1ZCI6ImRpc3BhdGNoLW1jcCIsImlzcyI6ImRpc3BhdGNoIiwiZXhwIjoxODEwOTA4NjYzfQ.n0CHkQ2_zqV06mi3ETTMI2BXyWkSED1JJSIcIRvRFKQ
+
+Decoded payload:
+  {"sub":"user_test_demo","role":"se","aud":"dispatch-mcp","iss":"dispatch","exp":1810908663}
+
+Stderr:
+  [dispatch mint-token] Minted se token for user_test_demo, expires in 1y
+
+All claims correct: sub, role, aud="dispatch-mcp", iss="dispatch", exp set 1 year out.
+
+=== SUMMARY ===
+
+core:  186/186 tests (baseline unchanged)
+api:   66/66 tests (55 baseline + 11 new machine-auth tests)
+mcp:   13/13 tests (new — tool HTTP client tests, no core/db imports)
+
+Slice 8 complete. The @dispatch/mcp package is a pure HTTP client of the
+dispatch API — it does NOT import @dispatch/core or @dispatch/db (structural
+proof of A2: the API is clean enough that the MCP is a thin wrapper).
+
+Machine-credential auth (HS256, MCP_SIGNING_SECRET) is distinct from the
+Clerk session auth path. The four-case suite proves the credentials are
+mutually non-interchangeable (A3 proof).
