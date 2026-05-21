@@ -16,9 +16,16 @@
  *     the whole group (`process.kill(-pid, ...)`), waits a short grace window,
  *     then escalates to SIGKILL if the tree has not exited. No orphaned
  *     `claude`, shell, or child process leaks.
- *   - The SE's real `env` is passed through so `claude` resolves on PATH; the
- *     `cwd` is the boolean-knowledge repo root. The bridge supplies NO
- *     Anthropic credential (ADR-001 invariant).
+ *   - ALLOWLISTED ENV — the PTY is spawned with an explicit, narrow env built
+ *     from a fixed allowlist (`buildPtyEnv`), NOT the Companion's full
+ *     `process.env`. `claude` is browser-driven and has full local tool power,
+ *     so it must never see `COMPANION_TOKEN_SECRET` (the HS256 key signing
+ *     every connection token) or any other Companion secret — a leaked signing
+ *     key lets the session forge valid tokens for any SE/ticket. The allowlist
+ *     passes through only what `claude` needs to resolve on PATH and
+ *     authenticate from the SE's own `~/.claude` config (via `HOME`). The
+ *     bridge supplies NO Anthropic credential itself (ADR-001 invariant).
+ *   - The `cwd` is the boolean-knowledge repo root.
  */
 
 import crypto from "node:crypto";
@@ -28,6 +35,53 @@ import type { IPty } from "node-pty";
 /** The terminal teardown escalates SIGTERM → SIGKILL after this grace window. */
 export const KILL_GRACE_MS = 1500;
 
+/**
+ * Env var NAMES `claude` genuinely needs to run and authenticate from the SE's
+ * own local config. Everything else — most importantly `COMPANION_TOKEN_SECRET`
+ * and any other Companion secret — is dropped. `claude` authenticates from
+ * `~/.claude` (resolved via `HOME`), so no Anthropic credential is needed in
+ * this list and none is added.
+ */
+export const PTY_ENV_ALLOWLIST: readonly string[] = [
+  "PATH", // resolve the `claude` binary
+  "HOME", // `claude` reads its credentials/config from ~/.claude
+  "USER",
+  "LOGNAME",
+  "SHELL",
+  "LANG",
+  "TERM",
+  "TMPDIR",
+  "TZ",
+  "COLORTERM",
+];
+
+/**
+ * Prefixes for env var names that are also safe to pass through (locale group).
+ * `LC_ALL`, `LC_CTYPE`, etc. all govern locale and carry no secret.
+ */
+const PTY_ENV_ALLOWED_PREFIXES: readonly string[] = ["LC_"];
+
+/**
+ * Build the narrow, allowlisted env for the spawned `claude` PTY from a source
+ * env (the Companion's `process.env`). Only names on `PTY_ENV_ALLOWLIST` or
+ * matching an allowed prefix are carried through; `COMPANION_TOKEN_SECRET` and
+ * every other non-allowlisted var — secret or not — is dropped. Undefined
+ * values are skipped so the result is a clean `Record<string, string>`.
+ */
+export function buildPtyEnv(
+  source: NodeJS.ProcessEnv = process.env
+): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(source)) {
+    if (value === undefined) continue;
+    const allowed =
+      PTY_ENV_ALLOWLIST.includes(key) ||
+      PTY_ENV_ALLOWED_PREFIXES.some((p) => key.startsWith(p));
+    if (allowed) env[key] = value;
+  }
+  return env;
+}
+
 /** Options for spawning a Companion PTY session. */
 export interface PtySessionOptions {
   /** The `claude` binary name or absolute path. Default: "claude". */
@@ -36,7 +90,13 @@ export interface PtySessionOptions {
   claudeArgs?: readonly string[];
   /** cwd — the boolean-knowledge repo root. */
   cwd: string;
-  /** Environment — the SE's real env so `claude` is on PATH. */
+  /**
+   * Source environment — typically the Companion's `process.env`. It is NOT
+   * passed to `claude` as-is: `PtySession` runs it through `buildPtyEnv`, which
+   * keeps only the `PTY_ENV_ALLOWLIST` names and drops every Companion secret
+   * (`COMPANION_TOKEN_SECRET` in particular). `claude` still resolves on PATH
+   * and authenticates from `~/.claude` via `HOME`.
+   */
   env: NodeJS.ProcessEnv;
   /** Initial PTY size. */
   cols?: number;
@@ -84,12 +144,15 @@ export class PtySession {
     // DIRECT argv — `claude` is the file, claudeArgs are its argv. No shell.
     // node-pty's UnixTerminal calls setsid() so the child leads its own
     // process group; killing the negated PID reaches the whole tree.
+    // ALLOWLISTED ENV — `buildPtyEnv` strips COMPANION_TOKEN_SECRET (and every
+    // other non-allowlisted var) so the browser-driven `claude` can never read
+    // the token-signing key out of its own environment.
     this.pty = spawn(claudeBin, claudeArgs, {
       name: "xterm-256color",
       cols: opts.cols ?? 80,
       rows: opts.rows ?? 24,
       cwd: opts.cwd,
-      env: opts.env as { [key: string]: string },
+      env: buildPtyEnv(opts.env),
     });
 
     this.pty.onData((chunk) => {

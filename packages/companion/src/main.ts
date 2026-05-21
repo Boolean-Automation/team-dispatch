@@ -23,7 +23,8 @@ import { loadConfig } from "./config.js";
 import { authenticateUpgrade } from "./auth.js";
 import { BridgeSession } from "./bridge.js";
 import type { TicketContext } from "./context.js";
-import { COMPANION_VERSION } from "./protocol.js";
+import { buildPtyEnv } from "./pty-session.js";
+import { COMPANION_VERSION, MAX_FRAME_BYTES } from "./protocol.js";
 
 /**
  * Build the Companion server. Returns the HTTP server, the WS server, and a
@@ -75,7 +76,13 @@ export function buildCompanionServer(config = loadConfig()) {
     res.end("Upgrade Required");
   });
 
-  const wss = new WebSocketServer({ noServer: true });
+  // `maxPayload` caps a frame at the protocol layer — `ws` rejects an
+  // oversized frame before buffering it, instead of buffering up to its 100 MiB
+  // default and only then hitting the app-level `MAX_FRAME_BYTES` check in
+  // `parseClientFrame`. Without this an authed (or XSS-driven) client could
+  // stream huge frames and exhaust the SE's laptop memory. The app-level check
+  // stays as defense-in-depth.
+  const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_FRAME_BYTES });
 
   /** Every live bridged session — the SIGTERM handler walks this. */
   const liveSessions = new Set<BridgeSession>();
@@ -120,7 +127,11 @@ export function buildCompanionServer(config = loadConfig()) {
       const bridge = new BridgeSession(ws, {
         pty: {
           cwd: config.knowledgeRoot,
-          env: process.env,
+          // Allowlisted env — never the Companion's full process.env. This
+          // strips COMPANION_TOKEN_SECRET so the browser-driven `claude`
+          // cannot read the token-signing key. PtySession also re-applies
+          // buildPtyEnv defensively.
+          env: buildPtyEnv(process.env),
           // Interactive `claude` — the human in the panel drives it.
           claudeArgs: [],
         },

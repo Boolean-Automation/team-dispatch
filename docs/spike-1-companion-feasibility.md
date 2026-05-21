@@ -131,9 +131,19 @@ backend-minted token; a DNS-rebinding attack fails on the `Host` pin.
 The token is minted by `POST /api/companion/sessions` (Q-A12e,
 `evidence/A12e-mint-route.txt`): a non-cacheable `POST`, `Cache-Control:
 no-store`, scoped to five claims (Clerk user, ticket, audience/Origin, session,
-TTL), the route authorizes ticket access before minting (an inaccessible ticket
-→ **403**), rate-limited, and the minted token value is **never logged** (the
+TTL), rate-limited, and the minted token value is **never logged** (the
 audit event carries only the `jti`).
+
+> **Honesty qualifier — the mint route's ticket check is existence-only, not a
+> per-SE ACL.** The route gates on (a) a valid Clerk session and (b) the
+> requested ticket *existing* — a non-existent ticket is rejected (**403**).
+> It does **not** verify that the calling SE is specifically authorized for
+> that ticket: in the spike, any Clerk-authed SE can mint a session token for
+> any ticket that exists. This is correct for the 2-person pilot (every SE sees
+> every ticket), and the route's inline comment says so. A real per-SE ticket
+> ACL is a **Phase 2 requirement** — Phase 2 must not assume the ACL already
+> exists. The "authorizes ticket access" language elsewhere in this doc and in
+> spec.md A12e refers to this existence check, not a per-user ACL.
 
 ### Q4 — Companion ↔ web app discovery?
 
