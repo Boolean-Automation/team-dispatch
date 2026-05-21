@@ -132,6 +132,8 @@ export async function sendReply(opts: SendReplyOpts): Promise<SendReplyResult> {
     payload: {
       channelId,
       text: body,
+      // actorId resolves the per-SE Slack user token at send time (OQ-2).
+      actorId,
       username: actorName,
       iconUrl: actorIconUrl ?? null,
     },

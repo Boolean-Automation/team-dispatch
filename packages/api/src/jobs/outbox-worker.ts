@@ -2,17 +2,15 @@
 //
 // Runs on a node-cron schedule (every 5s by default). On each tick:
 //   1. Fetch pending rows whose scheduled_at has passed.
-//   2. For each row: call postReply() (STUBBED per OQ-2 gate).
+//   2. For each row: call postReply() — posts to Slack as the SE's user.
 //   3. Move the row to 'sent' or 'failed' depending on the result.
 //
 // Idempotency: markOutboxRowSent() only transitions rows still in 'pending'
 // status — a concurrent worker restart cannot double-post.
 //
-// ⚠️  OQ-2 HARD GATE — the actual live send is STUBBED in write-back.ts.
-// See plan.md §4 OQ-2 and §8. The worker, polling, and cancel path are all
-// live and demoable; only the chat.postMessage call waits on the operator.
-//
-// TODO(OQ-2): once write-back.ts postReply() is wired, no changes needed here.
+// OQ-2 RESOLVED: postReply() in write-back.ts posts via per-SE Slack user
+// tokens. A row whose SE has no configured token fails gracefully (the row
+// moves to 'failed' with a clear last_error) — the worker never crashes.
 //
 // plan §Slice 5 / spec §3.7
 
@@ -47,6 +45,7 @@ async function processDueRows(db: Db): Promise<void> {
       text: typeof payload.text === "string" ? payload.text : "",
       threadTs:
         typeof payload.threadTs === "string" ? payload.threadTs : undefined,
+      actorId: typeof payload.actorId === "string" ? payload.actorId : "",
       username:
         typeof payload.username === "string" ? payload.username : "dispatch",
       iconUrl:
@@ -54,9 +53,8 @@ async function processDueRows(db: Db): Promise<void> {
     };
 
     try {
-      // TODO(OQ-2): postReply() is currently STUBBED — it logs and returns a
-      // simulated success. Wire the live chat.postMessage in write-back.ts once
-      // the operator resolves OQ-2. No changes needed here at that point.
+      // postReply() posts to Slack as the SE's user via their per-SE token
+      // (OQ-2). A missing token returns ok=false → the row moves to 'failed'.
       const result = await postReply(sendPayload);
 
       if (result.ok) {
@@ -68,7 +66,7 @@ async function processDueRows(db: Db): Promise<void> {
           );
         } else {
           console.log(
-            `[outbox-worker] row ${row.id} sent (stub) for message ${row.messageId}`
+            `[outbox-worker] row ${row.id} sent for message ${row.messageId}`
           );
         }
       } else {

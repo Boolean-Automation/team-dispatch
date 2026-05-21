@@ -97,10 +97,15 @@ export function TicketDetailPage() {
   // ── Fixture fallback (DEV ONLY) ────────────────────────────────────────────
   // When the API is unavailable (401 / network error / no Clerk keys in dev),
   // fall back to fixture data so the UI renders visually.
-  // This NEVER activates in production — only triggers when the API returns an error
-  // AND the displayId matches the known fixture ticket.
+  // Gated on import.meta.env.DEV — Vite statically replaces this with `false`
+  // in a production build, so the fixture path can NEVER activate in prod (a
+  // real transient API error in production surfaces as an error state, not as
+  // silently-fake fixture data). It only triggers in a dev build, when the API
+  // errors, AND the displayId matches the known fixture ticket.
   const apiUnavailable =
-    ticketQuery.isError && displayId === FIXTURE_TICKET.displayId;
+    import.meta.env.DEV &&
+    ticketQuery.isError &&
+    displayId === FIXTURE_TICKET.displayId;
 
   const ticket: Ticket | null =
     ticketQuery.data ?? (apiUnavailable ? FIXTURE_TICKET : null);
