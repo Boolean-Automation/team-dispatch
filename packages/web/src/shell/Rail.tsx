@@ -1,11 +1,13 @@
 // dispatch — Rail (left sidebar) component
 // Ported from shell.jsx Rail function.
+// Slice 2: rail footer reads the live Clerk user; falls back to seed SIGNED_IN_KEY.
 
 import React from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import Ic from "./Ic";
 import { Avatar } from "./Avatar";
 import { ENGINEERS, SIGNED_IN_KEY, DEFAULT_VIEW_COUNTS } from "../lib/seed";
+import { useDispatchUser } from "../lib/clerk";
 import type { ViewCounts } from "../lib/types";
 
 type CurrentView = "issues" | "accounts" | "analytics" | "settings";
@@ -17,6 +19,15 @@ interface RailProps {
 
 export function Rail({ current, viewCounts = {} }: RailProps) {
   const counts: ViewCounts = { ...DEFAULT_VIEW_COUNTS, ...viewCounts };
+
+  // Slice 2: live Clerk user. Falls back to seed data when no Clerk app is
+  // configured yet (pre-setup local dev) or when Clerk hasn't loaded.
+  const clerkUser = useDispatchUser();
+  const footerName = clerkUser?.name ?? ENGINEERS[SIGNED_IN_KEY]?.name ?? SIGNED_IN_KEY;
+  const footerRole = clerkUser?.role === "admin" ? "Admin" : "Support eng";
+  const footerKey = clerkUser ? null : SIGNED_IN_KEY; // null => Avatar renders from color below
+  const footerInitials = clerkUser?.initials;
+  const footerColor = clerkUser?.color;
 
   return (
     <aside className="rail">
@@ -178,14 +189,34 @@ export function Rail({ current, viewCounts = {} }: RailProps) {
         </div>
       </div>
 
-      {/* Footer — signed-in SE */}
+      {/* Footer — signed-in SE (live Clerk user in Slice 2+; seed fallback pre-setup) */}
       <div className="rail-footer">
-        <Avatar engKey={SIGNED_IN_KEY} />
-        <div className="rail-footer-meta">
-          <span className="rail-footer-name">
-            {ENGINEERS[SIGNED_IN_KEY]?.name ?? SIGNED_IN_KEY}
+        {clerkUser ? (
+          // Clerk user: render an inline avatar with the deterministic color
+          <span
+            className="avatar"
+            title={footerName}
+            style={{
+              background: footerColor,
+              width: 18,
+              height: 18,
+              fontSize: 9,
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              borderRadius: "50%",
+              color: "#0f172a",
+              fontWeight: 600,
+            }}
+          >
+            {footerInitials?.[0]}
           </span>
-          <span className="rail-footer-role">Support eng</span>
+        ) : (
+          <Avatar engKey={footerKey} />
+        )}
+        <div className="rail-footer-meta">
+          <span className="rail-footer-name">{footerName}</span>
+          <span className="rail-footer-role">{footerRole}</span>
         </div>
         <span className="rail-footer-chev">
           <Ic.chev />

@@ -128,7 +128,7 @@ team-dispatch/
 | Slice | Description | Status |
 |---|---|---|
 | 1 | Running app: kanban dashboard on seed data | ✅ Complete |
-| 2 | Clerk auth gates the app | ⬜ Not started |
+| 2 | Clerk auth gates the app | ✅ Complete |
 | 3 | Backend + four-entity schema + live data | ⬜ Not started |
 | 4 | Ingestion interface + Slack webhook feeder | ⬜ Not started |
 | 5 | Ticket detail + reply + Slack write-back | ⬜ Not started (OQ-2 gate on send path) |

@@ -1,11 +1,12 @@
 // dispatch — App root
-// Provides the QueryClient and BrowserRouter context, then renders routes.
-// Slice 2 wraps this with ClerkProvider + a protected-route guard.
+// Slice 2: wraps routes in RequireAuth so unauthenticated visitors see
+// the Clerk sign-in UI instead of the application.
 
 import React from "react";
 import { BrowserRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { AppRoutes } from "./routes";
+import { RequireAuth } from "./lib/clerk";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -21,7 +22,9 @@ export function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
-        <AppRoutes />
+        <RequireAuth>
+          <AppRoutes />
+        </RequireAuth>
       </BrowserRouter>
     </QueryClientProvider>
   );

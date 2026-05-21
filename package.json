@@ -8,8 +8,8 @@
   ],
   "scripts": {
     "dev": "pnpm --filter @dispatch/web dev",
-    "build": "pnpm --filter @dispatch/web build",
-    "typecheck": "pnpm --filter @dispatch/web typecheck",
+    "build": "pnpm --filter @dispatch/web build && pnpm --filter @dispatch/api build",
+    "typecheck": "pnpm --filter @dispatch/web typecheck && pnpm --filter @dispatch/api typecheck",
     "lint": "eslint .",
     "test": "pnpm -r test"
   },

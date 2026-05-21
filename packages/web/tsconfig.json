@@ -10,7 +10,7 @@
     "noEmit": true,
     "tsBuildInfoFile": "./.tsbuildinfo",
     "composite": false,
-    "types": []
+    "types": ["vite/client"]
   },
   "include": ["src"],
   "references": []
