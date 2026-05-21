@@ -6,6 +6,7 @@
 // Phase-1 scope:
 //   NO .clock-grp clock/billable controls (Phase 3).
 //   Status control wired to PATCH /api/tickets/:id/status (Slice 6).
+//   Slice 7: ReassignControl + EffortBucketControl wired.
 //
 // Ported from ticket-detail.jsx TicketHeader (without clock-grp props).
 
@@ -17,6 +18,8 @@ import Ic from "../shell/Ic";
 import { ACCOUNTS, HEALTH_LABEL } from "../lib/seed";
 import type { Ticket, TicketStatus } from "../lib/types";
 import { apiClient } from "../lib/api-client";
+import { ReassignControl } from "./ReassignControl";
+import { EffortBucketControl } from "./EffortBucketControl";
 
 // ── Status label map ──────────────────────────────────────────────────────────
 
@@ -160,9 +163,10 @@ function StatusDropdown({ ticketId, currentStatus, onChanged }: StatusDropdownPr
 interface TicketHeaderProps {
   ticket: Ticket;
   assigneeName?: string;
+  isAdmin?: boolean;
 }
 
-export function TicketHeader({ ticket, assigneeName }: TicketHeaderProps) {
+export function TicketHeader({ ticket, assigneeName, isAdmin = false }: TicketHeaderProps) {
   const account = ACCOUNTS[ticket.accountId];
   const clientName = account?.displayName ?? ticket.clientName ?? ticket.accountId;
   const clientHealth = account?.health ?? ticket.clientHealth ?? "good";
@@ -200,9 +204,7 @@ export function TicketHeader({ ticket, assigneeName }: TicketHeaderProps) {
           <span className="lbl">Assignee</span>
           <Avatar engKey={ticket.assignee} />
           <span>{displayAssigneeName}</span>
-          <span className="subtle-link">
-            <Ic.edit /> reassign
-          </span>
+          <ReassignControl ticketId={ticket.id} isAdmin={isAdmin} />
         </div>
         <span className="t-divider"></span>
         <div className="meta-grp">
@@ -213,6 +215,7 @@ export function TicketHeader({ ticket, assigneeName }: TicketHeaderProps) {
         </div>
         <span style={{ flex: 1 }}></span>
         {/* Phase 3 clock-grp OMITTED per surface-map §3 */}
+        <EffortBucketControl ticketId={ticket.id} currentBucket={ticket.effortBucket} />
         <button className="btn-outline" title="Add reinforcement">
           <Ic.plus /> Reinforcement
         </button>

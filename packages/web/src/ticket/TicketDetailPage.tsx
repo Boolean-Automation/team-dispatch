@@ -26,6 +26,7 @@ import { TicketTabs } from "./TicketTabs";
 import type { TicketTab } from "./TicketTabs";
 import { Highlights } from "./Highlights";
 import { ChatThread } from "./ChatThread";
+import { InternalThread } from "./InternalThread";
 import { RightPanel } from "./RightPanel";
 import type { PanelMode } from "./RightPanel";
 import { RToolbar } from "./RToolbar";
@@ -246,11 +247,16 @@ export function TicketDetailPage() {
               onSave={handleHighlightsSave}
             />
           )}
-          <ChatThread
-            tab={tab}
-            chatItems={chatItems}
-            internalItems={internalItems}
-          />
+          {tab === "internal" ? (
+            /* Slice 7: InternalThread wired — dispatch-native, never to Slack (A21) */
+            <InternalThread ticketId={ticket.id} />
+          ) : (
+            <ChatThread
+              tab={tab}
+              chatItems={chatItems}
+              internalItems={internalItems}
+            />
+          )}
           {tab !== "linked" && tab !== "internal" && (
             <Composer
               ticketId={ticket.id}

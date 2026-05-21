@@ -8,6 +8,7 @@
 // Slice 3 wires: db plugin, tickets/accounts/contacts read routes.
 // Slice 4 wires: raw-body plugin, ingestion/undo/notifications/activity routes.
 // Slice 5 wires: messages route, accounts highlights endpoint, outbox worker.
+// Slice 7 wires: internal-thread, reassignment, reinforcement routes.
 
 import Fastify from "fastify";
 import errorHandlerPlugin from "./plugins/error-handler.js";
@@ -23,6 +24,9 @@ import undoRoutes from "./routes/undo.js";
 import notificationRoutes from "./routes/notifications.js";
 import activityRoutes from "./routes/activity.js";
 import messageRoutes from "./routes/messages.js";
+import internalThreadRoutes from "./routes/internal-thread.js";
+import reassignmentRoutes from "./routes/reassignment.js";
+import reinforcementRoutes from "./routes/reinforcements.js";
 import { startOutboxWorker } from "./jobs/outbox-worker.js";
 import { startSlaTimer } from "./jobs/sla-timer.js";
 import type { Db } from "@dispatch/db";
@@ -61,6 +65,10 @@ export async function buildServer(opts: BuildServerOptions = {}) {
   await fastify.register(activityRoutes);
   // Slice 5 routes
   await fastify.register(messageRoutes);
+  // Slice 7 routes
+  await fastify.register(internalThreadRoutes);
+  await fastify.register(reassignmentRoutes);
+  await fastify.register(reinforcementRoutes);
 
   // ── Health check ─────────────────────────────────────────────────────────────
   fastify.get("/health", async () => ({ ok: true }));

@@ -3,15 +3,23 @@
 // Phase-1 scope: all fields built. Effort section renders layout with
 // placeholder/zero values (Phase 3 clock-in writes the data).
 // Slice 6: status control in right panel wired to PATCH /api/tickets/:id/status.
+// Slice 7: Collaborators section wired; Reassign/Reinforcement action buttons functional.
 // Ported from ticket-detail.jsx PanelInfo.
 
 import React, { useState, useRef, useEffect } from "react";
-import { useQueryClient, useMutation } from "@tanstack/react-query";
+import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { Avatar } from "../shell/Avatar";
 import Ic from "../shell/Ic";
 import { ACCOUNTS, HEALTH_LABEL } from "../lib/seed";
 import type { Ticket, TicketStatus } from "../lib/types";
 import { apiClient } from "../lib/api-client";
+import { useUndoableMutation } from "../lib/use-undoable-mutation.js";
+
+interface ReinforcementDto {
+  ticketId: string;
+  collaborator: string;
+  addedAt: string;
+}
 
 const STATUS_LABEL: Record<string, string> = {
   new: "New",
@@ -165,6 +173,31 @@ export function PanelInfo({ ticket, assigneeName }: PanelInfoProps) {
   const typeClass = TYPE_TAG_CLASS[ticket.type] ?? "other";
   const displayAssigneeName = assigneeName ?? ticket.assignee ?? "Unassigned";
 
+  // Fetch reinforcement collaborators
+  const { data: reinforcements = [] } = useQuery<ReinforcementDto[]>({
+    queryKey: ["reinforcements", ticket.id],
+    queryFn: () =>
+      apiClient.get<ReinforcementDto[]>(`/api/tickets/${ticket.id}/reinforcements`),
+    enabled: Boolean(ticket.id),
+    refetchInterval: 25_000,
+  });
+
+  // Add reinforcement mutation
+  const addReinforcementMutation = useUndoableMutation({
+    mutationFn: (collaboratorId: string) =>
+      apiClient.post<{ reinforcement: ReinforcementDto; undoToken: string }>(
+        `/api/tickets/${ticket.id}/reinforcements`,
+        { collaboratorId }
+      ),
+    toastLabel: "Collaborator added",
+    invalidateKeys: [["reinforcements", ticket.id]],
+  });
+
+  function handleAddReinforcement() {
+    const id = prompt("Collaborator Clerk user id:");
+    if (id?.trim()) addReinforcementMutation.mutate(id.trim());
+  }
+
   return (
     <>
       {/* ── Ticket section ─────────────────────────────────────────────────── */}
@@ -189,8 +222,15 @@ export function PanelInfo({ ticket, assigneeName }: PanelInfoProps) {
         </div>
         <div className="rp-row">
           <span className="k">Collaborators</span>
-          <span className="v">
-            <span className="subtle-link" style={{ marginLeft: 0 }}>
+          <span className="v" style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
+            {reinforcements.map((r) => (
+              <Avatar key={r.collaborator} engKey={r.collaborator} />
+            ))}
+            <span
+              className="subtle-link"
+              style={{ marginLeft: 0, cursor: "pointer" }}
+              onClick={handleAddReinforcement}
+            >
               + add
             </span>
           </span>

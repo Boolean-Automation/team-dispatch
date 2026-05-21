@@ -1,11 +1,12 @@
 // dispatch — /api/tickets routes
 //
 // Routes:
-//   GET  /api/tickets              — list tickets with filter/sort (Clerk session auth)
-//   GET  /api/tickets/:id          — get a single ticket by id (Clerk session auth)
-//   POST /api/tickets              — hand-create a ticket (Clerk session auth, ADR-005)
-//   POST /api/tickets/:id/dismiss  — dismiss a ticket, undoable (Clerk session auth)
-//   PATCH /api/tickets/:id/status  — change ticket status, undoable (Clerk session auth, A25)
+//   GET  /api/tickets                   — list tickets with filter/sort (Clerk session auth)
+//   GET  /api/tickets/:id               — get a single ticket by id (Clerk session auth)
+//   POST /api/tickets                   — hand-create a ticket (Clerk session auth, ADR-005)
+//   POST /api/tickets/:id/dismiss       — dismiss a ticket, undoable (Clerk session auth)
+//   PATCH /api/tickets/:id/status       — change ticket status, undoable (Clerk session auth, A25)
+//   PATCH /api/tickets/:id/effort-bucket — set effort bucket, undoable (Clerk session auth, A7)
 
 import type {
   FastifyInstance,
@@ -23,6 +24,7 @@ import {
   createTicketManual,
   dismissTicket,
   updateTicketStatus,
+  setEffortBucket,
 } from "@dispatch/core";
 
 interface TicketByIdRoute extends RouteGenericInterface {
@@ -38,6 +40,16 @@ interface CreateTicketBody {
   type?: "question" | "reply" | "thanks" | "ooo" | "other";
   body?: string;
 }
+
+interface PatchEffortBucketBody {
+  effortBucket: string;
+}
+
+const VALID_EFFORT_BUCKETS = [
+  "client-specific",
+  "platform-shared",
+  "one-time-build",
+] as const;
 
 export default async function ticketRoutes(
   fastify: FastifyInstance
@@ -161,6 +173,53 @@ export default async function ticketRoutes(
 
       if (!result.ok) {
         // Distinguish "not found" from "invalid transition"
+        if (result.error?.includes("not found")) {
+          return reply.status(404).send({
+            error: "Not Found",
+            message: result.error,
+            statusCode: 404,
+          });
+        }
+        return reply.status(422).send({
+          error: "Unprocessable Entity",
+          message: result.error,
+          statusCode: 422,
+        });
+      }
+
+      return reply.send(result);
+    }
+  );
+
+  // PATCH /api/tickets/:id/effort-bucket — set effort bucket (undoable, A7)
+  fastify.patch<TicketByIdRoute>(
+    "/api/tickets/:id/effort-bucket",
+    { preHandler: requireClerkSession },
+    async (request, reply) => {
+      const body = request.body as Partial<PatchEffortBucketBody>;
+      const bucket = body.effortBucket;
+
+      if (
+        !bucket ||
+        !VALID_EFFORT_BUCKETS.includes(
+          bucket as (typeof VALID_EFFORT_BUCKETS)[number]
+        )
+      ) {
+        return reply.status(400).send({
+          error: "Bad Request",
+          message: `Invalid effortBucket. Must be one of: ${VALID_EFFORT_BUCKETS.join(", ")}`,
+          statusCode: 400,
+        });
+      }
+
+      const result = await setEffortBucket(
+        fastify.db,
+        request.params.id,
+        bucket as (typeof VALID_EFFORT_BUCKETS)[number],
+        request.auth.userId
+      );
+
+      if (!result.ok) {
         if (result.error?.includes("not found")) {
           return reply.status(404).send({
             error: "Not Found",

@@ -2,6 +2,7 @@
 //
 // Phase-1 scope: all three tabs are built; internal-thread messages render
 // WITHOUT the channel tag (OQ-3 resolution — no Slack sync in Phase 1).
+// Slice 7: InternalThread component wired when tab === 'internal'.
 // Ported from ticket-detail.jsx Tabs.
 
 import React from "react";

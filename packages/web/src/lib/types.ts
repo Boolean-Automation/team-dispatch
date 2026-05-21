@@ -118,4 +118,24 @@ export interface ViewCounts {
   mine: number;
   accounts: number;
   closed: number;
+  shared?: number; // Slice 7: tickets where the user is a reinforcement collaborator (A27)
+}
+
+// ── Reinforcement (collaborator join) ─────────────────────────────────────────
+
+export interface ReinforcementInfo {
+  ticketId: string;
+  collaborator: string;
+  addedAt: string;
+}
+
+// ── Internal thread message ───────────────────────────────────────────────────
+
+export interface InternalThreadMessageInfo {
+  id: string;
+  ticketId: string;
+  authorId: string;
+  body: string;
+  postedAt: string;
+  createdAt: string;
 }
