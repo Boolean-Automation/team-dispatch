@@ -5,16 +5,18 @@
 //
 // Phase-1 scope:
 //   NO .clock-grp clock/billable controls (Phase 3).
-//   Status control is display-only in Phase 1 (status mutation Slice 6).
+//   Status control wired to PATCH /api/tickets/:id/status (Slice 6).
 //
 // Ported from ticket-detail.jsx TicketHeader (without clock-grp props).
 
-import React from "react";
+import React, { useState, useRef, useEffect } from "react";
 import { Link } from "react-router-dom";
+import { useQueryClient, useMutation } from "@tanstack/react-query";
 import { Avatar } from "../shell/Avatar";
 import Ic from "../shell/Ic";
 import { ACCOUNTS, HEALTH_LABEL } from "../lib/seed";
-import type { Ticket } from "../lib/types";
+import type { Ticket, TicketStatus } from "../lib/types";
+import { apiClient } from "../lib/api-client";
 
 // ── Status label map ──────────────────────────────────────────────────────────
 
@@ -50,6 +52,109 @@ function slaDisplay(
   return { label: `${timeStr} left`, color: "var(--emerald)" };
 }
 
+// ── StatusDropdown ────────────────────────────────────────────────────────────
+
+const STATUS_ORDER: TicketStatus[] = [
+  "new",
+  "on-you",
+  "waiting-client",
+  "follow-up-required",
+  "follow-up-1-sent",
+  "closeout",
+  "closed",
+  "complete",
+];
+
+interface StatusDropdownProps {
+  ticketId: string;
+  currentStatus: TicketStatus;
+  onChanged?: (newStatus: TicketStatus) => void;
+}
+
+function StatusDropdown({ ticketId, currentStatus, onChanged }: StatusDropdownProps) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const queryClient = useQueryClient();
+
+  const mutation = useMutation({
+    mutationFn: (status: TicketStatus) =>
+      apiClient.patch(`/api/tickets/${ticketId}/status`, { status }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["ticket", ticketId] });
+      void queryClient.invalidateQueries({ queryKey: ["tickets"] });
+    },
+  });
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    function handleOutside(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    }
+    if (open) document.addEventListener("mousedown", handleOutside);
+    return () => document.removeEventListener("mousedown", handleOutside);
+  }, [open]);
+
+  function handleSelect(status: TicketStatus) {
+    if (status === currentStatus) {
+      setOpen(false);
+      return;
+    }
+    mutation.mutate(status, {
+      onSuccess: () => {
+        onChanged?.(status);
+        setOpen(false);
+      },
+    });
+  }
+
+  const statusLabel = STATUS_LABEL[currentStatus] ?? currentStatus;
+
+  return (
+    <div className="status-control" ref={ref} style={{ position: "relative", cursor: "pointer" }}
+      onClick={() => setOpen((v) => !v)}
+      title="Change status"
+    >
+      <span className="stat-dot"></span>
+      {statusLabel}
+      <Ic.chev />
+      {open && (
+        <div
+          style={{
+            position: "absolute",
+            top: "100%",
+            right: 0,
+            background: "var(--surface-2, #1e1e2e)",
+            border: "1px solid var(--border, #2a2a3a)",
+            borderRadius: 6,
+            minWidth: 180,
+            zIndex: 100,
+            padding: "4px 0",
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {STATUS_ORDER.map((s) => (
+            <div
+              key={s}
+              style={{
+                padding: "6px 14px",
+                cursor: "pointer",
+                fontWeight: s === currentStatus ? 600 : 400,
+                color: s === currentStatus ? "var(--accent, #6366f1)" : "inherit",
+                fontSize: 13,
+              }}
+              onClick={() => handleSelect(s)}
+            >
+              {STATUS_LABEL[s] ?? s}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── TicketHeader ──────────────────────────────────────────────────────────────
 
 interface TicketHeaderProps {
@@ -63,7 +168,6 @@ export function TicketHeader({ ticket, assigneeName }: TicketHeaderProps) {
   const clientHealth = account?.health ?? ticket.clientHealth ?? "good";
   const healthLabel = HEALTH_LABEL[clientHealth] ?? clientHealth;
   const { label: slaLabel, color: slaColor } = slaDisplay(ticket);
-  const statusLabel = STATUS_LABEL[ticket.status] ?? ticket.status;
   const displayAssigneeName = assigneeName ?? ticket.assignee ?? "Unassigned";
 
   return (
@@ -79,11 +183,7 @@ export function TicketHeader({ ticket, assigneeName }: TicketHeaderProps) {
           {ticket.preview ?? `Ticket ${ticket.displayId}`}
         </h1>
         <span style={{ flex: 1 }}></span>
-        <div className="status-control">
-          <span className="stat-dot"></span>
-          {statusLabel}
-          <Ic.chev />
-        </div>
+        <StatusDropdown ticketId={ticket.id} currentStatus={ticket.status} />
       </div>
 
       <div className="t-meta">

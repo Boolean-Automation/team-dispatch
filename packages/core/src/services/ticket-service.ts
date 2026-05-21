@@ -1,12 +1,17 @@
-// dispatch — ticket-service: read-side service
+// dispatch — ticket-service: read-side + status-mutation service
 //
 // All Ticket reads go through here. Joins accounts for board card shapes.
 // Slice 3: list (with filter/sort) + get.
+// Slice 6: updateTicketStatus — PATCH /api/tickets/:id/status, undoable, audited.
 
 import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
 import type { Db } from "@dispatch/db";
 import { accounts, messages, tickets } from "@dispatch/db";
 import type { TicketCard, TicketDto, TicketListQuery } from "../entities/ticket.js";
+import type { TicketStatus } from "../entities/ticket.js";
+import { validateTransition } from "./status-ladder.js";
+import { appendAudit } from "./audit-service.js";
+import { generateUndoToken } from "./undo-service.js";
 
 function toDto(row: typeof tickets.$inferSelect): TicketDto {
   return {
@@ -166,4 +171,90 @@ export async function getTicketByDisplayId(
     .where(eq(tickets.displayId, displayId))
     .limit(1);
   return rows[0] ? toDto(rows[0]) : null;
+}
+
+// ── updateTicketStatus ─────────────────────────────────────────────────────────
+//
+// PATCH /api/tickets/:id/status — manually change ticket status.
+// Validates the transition via status-ladder rules, records resolved_at when
+// moving to 'closed' or 'complete', and returns an undo token (A25).
+// plan §Slice 6
+
+export interface UpdateTicketStatusResult {
+  ok: boolean;
+  error?: string;
+  undoToken?: string;
+  previousStatus?: TicketStatus;
+  newStatus?: TicketStatus;
+}
+
+export async function updateTicketStatus(
+  db: Db,
+  ticketId: string,
+  targetStatus: TicketStatus,
+  actorId: string
+): Promise<UpdateTicketStatusResult> {
+  // Fetch current ticket
+  const rows = await db
+    .select({ id: tickets.id, status: tickets.status, effortBucket: tickets.effortBucket })
+    .from(tickets)
+    .where(eq(tickets.id, ticketId))
+    .limit(1);
+
+  if (rows.length === 0) {
+    return { ok: false, error: `Ticket ${ticketId} not found` };
+  }
+
+  const ticket = rows[0]!;
+  const fromStatus = ticket.status;
+
+  // Validate via the status ladder
+  const validation = validateTransition(fromStatus, targetStatus, "manual");
+  if (!validation.ok) {
+    return { ok: false, error: validation.error };
+  }
+
+  // Block 'closed' / 'complete' without an effort bucket (spec §3.4, A7)
+  if (
+    (targetStatus === "closed" || targetStatus === "complete") &&
+    !ticket.effortBucket
+  ) {
+    return {
+      ok: false,
+      error:
+        `Cannot move ticket to '${targetStatus}' without setting an effort bucket first.`,
+    };
+  }
+
+  const undoToken = generateUndoToken();
+
+  // Stamp resolved_at when closing or completing
+  const resolvedAt =
+    targetStatus === "closed" || targetStatus === "complete" ? new Date() : undefined;
+
+  await db
+    .update(tickets)
+    .set({
+      status: targetStatus,
+      updatedAt: new Date(),
+      ...(resolvedAt ? { resolvedAt } : {}),
+    })
+    .where(eq(tickets.id, ticketId));
+
+  // Audit log
+  await appendAudit(db, {
+    ticketId,
+    actorId,
+    event: "ticket.status_changed",
+    before: { status: fromStatus },
+    after: { status: targetStatus },
+    undoToken,
+  });
+
+  return {
+    ok: true,
+    undoToken,
+    previousStatus: fromStatus,
+    newStatus: targetStatus,
+  };
 }

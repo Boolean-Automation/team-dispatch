@@ -2,13 +2,16 @@
 //
 // Phase-1 scope: all fields built. Effort section renders layout with
 // placeholder/zero values (Phase 3 clock-in writes the data).
+// Slice 6: status control in right panel wired to PATCH /api/tickets/:id/status.
 // Ported from ticket-detail.jsx PanelInfo.
 
-import React from "react";
+import React, { useState, useRef, useEffect } from "react";
+import { useQueryClient, useMutation } from "@tanstack/react-query";
 import { Avatar } from "../shell/Avatar";
 import Ic from "../shell/Ic";
 import { ACCOUNTS, HEALTH_LABEL } from "../lib/seed";
-import type { Ticket } from "../lib/types";
+import type { Ticket, TicketStatus } from "../lib/types";
+import { apiClient } from "../lib/api-client";
 
 const STATUS_LABEL: Record<string, string> = {
   new: "New",
@@ -20,6 +23,102 @@ const STATUS_LABEL: Record<string, string> = {
   closed: "Closed",
   complete: "Complete",
 };
+
+const STATUS_ORDER: TicketStatus[] = [
+  "new",
+  "on-you",
+  "waiting-client",
+  "follow-up-required",
+  "follow-up-1-sent",
+  "closeout",
+  "closed",
+  "complete",
+];
+
+// ── PanelStatusControl ─────────────────────────────────────────────────────────
+
+interface PanelStatusControlProps {
+  ticketId: string;
+  currentStatus: TicketStatus;
+}
+
+function PanelStatusControl({ ticketId, currentStatus }: PanelStatusControlProps) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLSpanElement>(null);
+  const queryClient = useQueryClient();
+
+  const mutation = useMutation({
+    mutationFn: (status: TicketStatus) =>
+      apiClient.patch(`/api/tickets/${ticketId}/status`, { status }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["ticket", ticketId] });
+      void queryClient.invalidateQueries({ queryKey: ["tickets"] });
+    },
+  });
+
+  useEffect(() => {
+    function handleOutside(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    }
+    if (open) document.addEventListener("mousedown", handleOutside);
+    return () => document.removeEventListener("mousedown", handleOutside);
+  }, [open]);
+
+  function handleSelect(status: TicketStatus) {
+    if (status === currentStatus) { setOpen(false); return; }
+    mutation.mutate(status, { onSuccess: () => setOpen(false) });
+  }
+
+  return (
+    <span
+      ref={ref}
+      className="status-control"
+      style={{ padding: "2px 8px", fontSize: 11.5, position: "relative", cursor: "pointer" }}
+      onClick={() => setOpen((v) => !v)}
+      title="Change status"
+    >
+      <span className="stat-dot"></span>{" "}
+      {STATUS_LABEL[currentStatus] ?? currentStatus}{" "}
+      <Ic.chev />
+      {open && (
+        <span
+          style={{
+            position: "absolute",
+            top: "100%",
+            left: 0,
+            background: "var(--surface-2, #1e1e2e)",
+            border: "1px solid var(--border, #2a2a3a)",
+            borderRadius: 6,
+            minWidth: 170,
+            zIndex: 200,
+            padding: "4px 0",
+            display: "block",
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {STATUS_ORDER.map((s) => (
+            <span
+              key={s}
+              style={{
+                display: "block",
+                padding: "6px 14px",
+                cursor: "pointer",
+                fontWeight: s === currentStatus ? 600 : 400,
+                color: s === currentStatus ? "var(--accent, #6366f1)" : "inherit",
+                fontSize: 13,
+              }}
+              onClick={() => handleSelect(s)}
+            >
+              {STATUS_LABEL[s] ?? s}
+            </span>
+          ))}
+        </span>
+      )}
+    </span>
+  );
+}
 
 const TYPE_TAG_CLASS: Record<string, string> = {
   question: "question",
@@ -62,7 +161,6 @@ export function PanelInfo({ ticket, assigneeName }: PanelInfoProps) {
   const account = ACCOUNTS[ticket.accountId];
   const clientName = account?.displayName ?? ticket.clientName ?? ticket.accountId;
   const clientHealth = account?.health ?? ticket.clientHealth ?? "good";
-  const statusLabel = STATUS_LABEL[ticket.status] ?? ticket.status;
   const { label: slaLabel, color: slaColor } = fmtSla(ticket);
   const typeClass = TYPE_TAG_CLASS[ticket.type] ?? "other";
   const displayAssigneeName = assigneeName ?? ticket.assignee ?? "Unassigned";
@@ -77,12 +175,7 @@ export function PanelInfo({ ticket, assigneeName }: PanelInfoProps) {
         <div className="rp-row">
           <span className="k">Status</span>
           <span className="v">
-            <span
-              className="status-control"
-              style={{ padding: "2px 8px", fontSize: 11.5 }}
-            >
-              <span className="stat-dot"></span> {statusLabel} <Ic.chev />
-            </span>
+            <PanelStatusControl ticketId={ticket.id} currentStatus={ticket.status} />
           </span>
         </div>
         <div className="rp-row">

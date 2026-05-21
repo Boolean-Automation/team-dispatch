@@ -24,6 +24,7 @@ import notificationRoutes from "./routes/notifications.js";
 import activityRoutes from "./routes/activity.js";
 import messageRoutes from "./routes/messages.js";
 import { startOutboxWorker } from "./jobs/outbox-worker.js";
+import { startSlaTimer } from "./jobs/sla-timer.js";
 import type { Db } from "@dispatch/db";
 
 const PORT = Number(process.env.PORT ?? 3000);
@@ -81,4 +82,8 @@ if (isMain) {
   // Start the outbox worker after the server is listening.
   // Only in the main process — not in tests (tests don't call buildServer from isMain).
   startOutboxWorker(server.db);
+
+  // Start the SLA timer cron job (Slice 6).
+  // Runs every 5 minutes; only advances tickets during business hours (6am–5pm PT).
+  startSlaTimer(server.db);
 }

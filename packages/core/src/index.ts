@@ -20,6 +20,8 @@ export * from "./services/notification-service.js";
 export * from "./services/outbox-service.js";
 export * from "./services/reply-service.js";
 export * from "./services/routing.js";
+export * from "./services/sla-clock.js";
+export * from "./services/status-ladder.js";
 export * from "./services/ticket-service.js";
 export * from "./services/undo-service.js";
 

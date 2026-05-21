@@ -105,25 +105,32 @@ describe("sendReply", () => {
     );
   });
 
-  it("marks ticket closed when resolveTicket=true", async () => {
+  it("moves ticket to waiting-client (not closed) when resolveTicket=true from on-you (A15)", async () => {
+    // Ensure ticket is on-you before the test
+    await db
+      .update(tickets)
+      .set({ status: "on-you", resolvedAt: null, updatedAt: new Date() })
+      .where(eq(tickets.id, testTicketId));
+
     const result = await sendReply({
       db,
       ticketId: testTicketId,
       actorId: "user_reply_test",
-      body: "All fixed — closing this out.",
+      body: "All fixed — let me know if you have any questions.",
       actorName: "Dan Chen",
       resolveTicket: true,
     });
 
     expect(result.message.direction).toBe("outbound");
 
-    // Ticket should now be closed
+    // Ticket should now be waiting-client (A15), NOT closed
     const updated = await db
       .select({ status: tickets.status })
       .from(tickets)
       .where(eq(tickets.id, testTicketId))
       .limit(1);
-    expect(updated[0]?.status).toBe("closed");
+    expect(updated[0]?.status).toBe("waiting-client");
+    expect(updated[0]?.status).not.toBe("closed");
 
     // Reset for subsequent tests
     await db
@@ -184,7 +191,7 @@ describe("undo on reply send", () => {
     expect(outboxIsClean).toBe(true);
   });
 
-  it("undo with resolveTicket=true reverts ticket status", async () => {
+  it("undo with resolveTicket=true reverts ticket status (waiting-client → on-you)", async () => {
     // Ensure ticket is on-you before the test
     await db
       .update(tickets)
@@ -201,13 +208,13 @@ describe("undo on reply send", () => {
       undoWindowSecs: 60,
     });
 
-    // Ticket is now closed
-    const closedRow = await db
+    // Ticket is now waiting-client (A15 — not closed)
+    const waitingRow = await db
       .select({ status: tickets.status })
       .from(tickets)
       .where(eq(tickets.id, testTicketId))
       .limit(1);
-    expect(closedRow[0]?.status).toBe("closed");
+    expect(waitingRow[0]?.status).toBe("waiting-client");
 
     // Undo
     const undoResult = await undoByToken(db, result.undoToken);

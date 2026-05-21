@@ -1,10 +1,11 @@
 // dispatch — /api/tickets routes
 //
 // Routes:
-//   GET /api/tickets       — list tickets with filter/sort (Clerk session auth)
-//   GET /api/tickets/:id   — get a single ticket by id (Clerk session auth)
-//   POST /api/tickets      — hand-create a ticket (Clerk session auth, ADR-005)
-//   POST /api/tickets/:id/dismiss — dismiss a ticket, undoable (Clerk session auth)
+//   GET  /api/tickets              — list tickets with filter/sort (Clerk session auth)
+//   GET  /api/tickets/:id          — get a single ticket by id (Clerk session auth)
+//   POST /api/tickets              — hand-create a ticket (Clerk session auth, ADR-005)
+//   POST /api/tickets/:id/dismiss  — dismiss a ticket, undoable (Clerk session auth)
+//   PATCH /api/tickets/:id/status  — change ticket status, undoable (Clerk session auth, A25)
 
 import type {
   FastifyInstance,
@@ -17,12 +18,18 @@ import {
   listTickets,
   getTicket,
   TicketListQuerySchema,
+  TicketStatusSchema,
   createTicketManual,
   dismissTicket,
+  updateTicketStatus,
 } from "@dispatch/core";
 
 interface TicketByIdRoute extends RouteGenericInterface {
   Params: { id: string };
+}
+
+interface PatchStatusBody {
+  status: string;
 }
 
 interface CreateTicketBody {
@@ -114,6 +121,50 @@ export default async function ticketRoutes(
           error: "Not Found",
           message: `Ticket ${request.params.id} not found`,
           statusCode: 404,
+        });
+      }
+
+      return reply.send(result);
+    }
+  );
+
+  // PATCH /api/tickets/:id/status — manually change ticket status (undoable, A25)
+  fastify.patch<TicketByIdRoute>(
+    "/api/tickets/:id/status",
+    { preHandler: requireClerkSession },
+    async (request, reply) => {
+      const body = request.body as Partial<PatchStatusBody>;
+
+      // Validate status value
+      const parseResult = TicketStatusSchema.safeParse(body.status);
+      if (!parseResult.success) {
+        return reply.status(400).send({
+          error: "Bad Request",
+          message: `Invalid status value. Must be one of: ${TicketStatusSchema.options.join(", ")}`,
+          statusCode: 400,
+        });
+      }
+
+      const result = await updateTicketStatus(
+        fastify.db,
+        request.params.id,
+        parseResult.data,
+        request.auth.userId
+      );
+
+      if (!result.ok) {
+        // Distinguish "not found" from "invalid transition"
+        if (result.error?.includes("not found")) {
+          return reply.status(404).send({
+            error: "Not Found",
+            message: result.error,
+            statusCode: 404,
+          });
+        }
+        return reply.status(422).send({
+          error: "Unprocessable Entity",
+          message: result.error,
+          statusCode: 422,
         });
       }
 

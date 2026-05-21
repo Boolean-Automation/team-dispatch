@@ -6,9 +6,14 @@
 // The durable outbox pattern (FIX 6): the reply endpoint calls this service;
 // the outbox worker fires the actual send after the undo window expires.
 //
+// Status transition (Slice 6 / A15 / FIX 4):
+//   resolveTicket=true from on-you        → waiting-client (A15)
+//   resolveTicket=true from follow-up-required → follow-up-1-sent + stamps followUp1SentAt (FIX 4)
+//   resolveTicket=false                   → status unchanged
+//   A reply NEVER moves a ticket to 'closed'.
+//
 // plan §Slice 5 / spec §3.7 / OQ-4
 
-import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import type { Db } from "@dispatch/db";
 import { messages, tickets } from "@dispatch/db";
@@ -16,6 +21,7 @@ import type { MessageDto } from "../entities/message.js";
 import { appendAudit } from "./audit-service.js";
 import { generateUndoToken } from "./undo-service.js";
 import { insertOutboxRow } from "./outbox-service.js";
+import { resolveReplyTransition } from "./status-ladder.js";
 
 // ── Default undo window ───────────────────────────────────────────────────────
 
@@ -35,8 +41,10 @@ export interface SendReplyOpts {
   /** SE avatar URL for Slack attribution (optional) */
   actorIconUrl?: string;
   /**
-   * If true, also move the ticket to 'closed' after sending.
-   * (Send & resolve flow)
+   * If true, advance the ticket status after sending ("Send & resolve" flow).
+   * - on-you → waiting-client (A15)
+   * - follow-up-required → follow-up-1-sent + stamps followUp1SentAt (FIX 4)
+   * A reply NEVER moves a ticket to 'closed'.
    */
   resolveTicket?: boolean;
   /** Undo window in seconds — defaults to DEFAULT_UNDO_WINDOW_SECS */
@@ -140,12 +148,37 @@ export async function sendReply(opts: SendReplyOpts): Promise<SendReplyResult> {
     scheduledAt,
   });
 
-  // Optionally resolve the ticket
+  // Optionally advance the ticket status ("Send & resolve" flow).
+  // Route through status-ladder rules — never set 'closed' directly from a reply.
   const prevStatus = ticket.status;
-  if (resolveTicket) {
+  const targetStatus = resolveTicket ? resolveReplyTransition(ticket.status) : null;
+
+  if (targetStatus) {
+    // FIX 4: follow-up-required → follow-up-1-sent stamps follow_up_1_sent_at
+    const followUp1SentAt =
+      targetStatus === "follow-up-1-sent" ? new Date() : undefined;
+
+    // Record firstResponseAt on the first SE reply (status was on-you or new)
+    let firstResponseAtStamp: Date | undefined;
+    if (ticket.status === "on-you" || ticket.status === "new") {
+      const existingRow = await db
+        .select({ firstResponseAt: tickets.firstResponseAt })
+        .from(tickets)
+        .where(eq(tickets.id, ticketId))
+        .limit(1);
+      if (!existingRow[0]?.firstResponseAt) {
+        firstResponseAtStamp = new Date();
+      }
+    }
+
     await db
       .update(tickets)
-      .set({ status: "closed", resolvedAt: new Date(), updatedAt: new Date() })
+      .set({
+        status: targetStatus,
+        updatedAt: new Date(),
+        ...(followUp1SentAt ? { followUp1SentAt } : {}),
+        ...(firstResponseAtStamp ? { firstResponseAt: firstResponseAtStamp } : {}),
+      })
       .where(eq(tickets.id, ticketId));
   }
 
@@ -154,11 +187,12 @@ export async function sendReply(opts: SendReplyOpts): Promise<SendReplyResult> {
     ticketId,
     actorId,
     event: "message.created",
-    before: resolveTicket ? { status: prevStatus } : null,
+    before: targetStatus ? { status: prevStatus } : null,
     after: {
       messageId: messageRow.id,
       direction: "outbound",
       resolvedTicket: resolveTicket,
+      ...(targetStatus ? { statusTransition: { from: prevStatus, to: targetStatus } } : {}),
     },
     undoToken,
   });

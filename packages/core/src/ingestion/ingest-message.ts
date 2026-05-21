@@ -27,6 +27,7 @@ import { routeTicket } from "../services/routing.js";
 import { appendAudit } from "../services/audit-service.js";
 import { createNotification } from "../services/notification-service.js";
 import { generateUndoToken } from "../services/undo-service.js";
+import { resolveClientReplyTransition } from "../services/status-ladder.js";
 
 // ── Result types ───────────────────────────────────────────────────────────────
 
@@ -293,6 +294,53 @@ async function handleThreadReply(
       messageId: existingMsg[0]!.id,
       ticketId: parentTicketId,
     };
+  }
+
+  // Apply client-reply status transitions (A16 / A17):
+  //   waiting-client → on-you  (A16: client replied while we were waiting)
+  //   closed         → on-you  (A17: client reply reopens a closed ticket)
+  const parentTicketStatus = await db
+    .select({ status: tickets.status, assignee: tickets.assignee })
+    .from(tickets)
+    .where(eq(tickets.id, parentTicketId))
+    .limit(1);
+
+  const parentRow = parentTicketStatus[0];
+  const clientReplyTargetStatus = parentRow
+    ? resolveClientReplyTransition(parentRow.status)
+    : null;
+
+  if (clientReplyTargetStatus && parentRow) {
+    await db
+      .update(tickets)
+      .set({ status: clientReplyTargetStatus, updatedAt: new Date() })
+      .where(eq(tickets.id, parentTicketId));
+
+    await appendAudit(db, {
+      ticketId: parentTicketId,
+      actorId: null,
+      event: "ticket.status_changed",
+      before: { status: parentRow.status },
+      after: {
+        status: clientReplyTargetStatus,
+        reason:
+          parentRow.status === "closed" ? "client-reply-reopen" : "client-reply",
+      },
+    });
+
+    // Notify the owning SE that the client replied
+    if (parentRow.assignee) {
+      await createNotification(db, {
+        recipientId: parentRow.assignee,
+        kind: "ticket-assigned", // closest available kind; dedicated kind in later phase
+        ticketId: parentTicketId,
+        payload: {
+          event: "client-replied",
+          previousStatus: parentRow.status,
+          newStatus: clientReplyTargetStatus,
+        },
+      });
+    }
   }
 
   // Create the thread-reply Message

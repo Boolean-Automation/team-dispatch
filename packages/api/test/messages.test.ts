@@ -173,25 +173,32 @@ describe("POST /api/tickets/:id/messages", () => {
     expect(res.status).toBe(404);
   });
 
-  it("closes the ticket when resolve=true", async () => {
+  it("moves ticket to waiting-client (not closed) when resolve=true from on-you (A15)", async () => {
+    // Ensure ticket is on-you before test
+    await db
+      .update(tickets)
+      .set({ status: "on-you", resolvedAt: null, updatedAt: new Date() })
+      .where(eq(tickets.id, testTicketId));
+
     const res = await supertest(app.server)
       .post(`/api/tickets/${testTicketId}/messages`)
       .set("Authorization", "Bearer valid-se-token")
       .send({
-        body: "All fixed, closing ticket.",
+        body: "All fixed, let me know if you need anything.",
         actorName: "Dan Chen",
         resolve: true,
       });
 
     expect(res.status).toBe(201);
 
-    // Verify ticket is closed
+    // Verify ticket moved to waiting-client (A15), not closed
     const tkt = await db
       .select({ status: tickets.status })
       .from(tickets)
       .where(eq(tickets.id, testTicketId))
       .limit(1);
-    expect(tkt[0]?.status).toBe("closed");
+    expect(tkt[0]?.status).toBe("waiting-client");
+    expect(tkt[0]?.status).not.toBe("closed");
 
     // Reset for subsequent tests
     await db
