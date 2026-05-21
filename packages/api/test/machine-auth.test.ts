@@ -293,3 +293,164 @@ describe("MCP route structure", () => {
     expect(res.statusCode).toBe(404);
   });
 });
+
+// ── P2-E: Machine token claim shape validation ────────────────────────────────
+//
+// The requireMachineCredential handler must reject tokens with malformed
+// sub / role / exp / iat claims (P2-E), not just bad signatures.
+
+describe("P2-E: requireMachineCredential — claim shape validation", () => {
+  let app: FastifyInstance;
+
+  beforeEach(async () => {
+    process.env.MCP_SIGNING_SECRET = "test-mcp-signing-secret-32-bytes!!";
+    app = await buildServer();
+    await app.ready();
+  });
+
+  afterEach(async () => {
+    _resetMachineVerifier();
+    _resetClerkVerifier();
+    delete process.env.MCP_SIGNING_SECRET;
+    await app.close();
+  });
+
+  it("returns 401 when sub is missing (undefined)", async () => {
+    const now = Math.floor(Date.now() / 1000);
+    _setMachineVerifierForTest(
+      vi.fn((_token, _secret) => ({
+        sub: undefined as unknown as string, // invalid — sub must be a non-empty string
+        role: "se",
+        aud: "dispatch-mcp",
+        iss: "dispatch",
+        exp: now + 3600,
+        iat: now,
+      }))
+    );
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/mcp/tickets",
+      headers: { Authorization: "Bearer some.token.here" },
+    });
+
+    expect(res.statusCode).toBe(401);
+    const body = res.json<{ message: string }>();
+    expect(body.message).toContain("sub");
+  });
+
+  it("returns 401 when sub is an empty string", async () => {
+    const now = Math.floor(Date.now() / 1000);
+    _setMachineVerifierForTest(
+      vi.fn((_token, _secret) => ({
+        sub: "", // invalid — must be non-empty
+        role: "se",
+        aud: "dispatch-mcp",
+        iss: "dispatch",
+        exp: now + 3600,
+        iat: now,
+      }))
+    );
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/mcp/tickets",
+      headers: { Authorization: "Bearer some.token.here" },
+    });
+
+    expect(res.statusCode).toBe(401);
+  });
+
+  it("returns 401 when role is an unknown value (e.g. 'superuser')", async () => {
+    const now = Math.floor(Date.now() / 1000);
+    _setMachineVerifierForTest(
+      vi.fn((_token, _secret) => ({
+        sub: "user_valid_id",
+        role: "superuser", // invalid — only 'admin' | 'se' allowed
+        aud: "dispatch-mcp",
+        iss: "dispatch",
+        exp: now + 3600,
+        iat: now,
+      }))
+    );
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/mcp/tickets",
+      headers: { Authorization: "Bearer some.token.here" },
+    });
+
+    expect(res.statusCode).toBe(401);
+    const body = res.json<{ message: string }>();
+    expect(body.message).toContain("role");
+  });
+
+  it("returns 401 when iat is missing (undefined)", async () => {
+    const now = Math.floor(Date.now() / 1000);
+    _setMachineVerifierForTest(
+      vi.fn((_token, _secret) => ({
+        sub: "user_valid_id",
+        role: "se",
+        aud: "dispatch-mcp",
+        iss: "dispatch",
+        exp: now + 3600,
+        iat: undefined as unknown as number, // invalid — iat must be a number
+      }))
+    );
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/mcp/tickets",
+      headers: { Authorization: "Bearer some.token.here" },
+    });
+
+    expect(res.statusCode).toBe(401);
+    const body = res.json<{ message: string }>();
+    expect(body.message).toContain("iat");
+  });
+});
+
+// ── P3-A: Malformed ticket id → 400 (not 500 from DB uuid-syntax error) ───────
+
+describe("P3-A: Malformed ticket id returns 400 on MCP route", () => {
+  let app: FastifyInstance;
+
+  beforeEach(async () => {
+    process.env.MCP_SIGNING_SECRET = "test-mcp-signing-secret-32-bytes!!";
+    app = await buildServer();
+    await app.ready();
+  });
+
+  afterEach(async () => {
+    _resetMachineVerifier();
+    _resetClerkVerifier();
+    delete process.env.MCP_SIGNING_SECRET;
+    await app.close();
+  });
+
+  it("GET /api/mcp/tickets/:id returns 400 for a non-UUID non-DSP id", async () => {
+    mockValidMachineToken("user_mcp_001");
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/mcp/tickets/not-a-valid-id",
+      headers: { Authorization: "Bearer valid.machine.token" },
+    });
+
+    expect(res.statusCode).toBe(400);
+    const body = res.json<{ message: string }>();
+    expect(body.message).toContain("Invalid ticket id");
+  });
+
+  it("GET /api/mcp/tickets/:id returns 400 for a partial UUID", async () => {
+    mockValidMachineToken("user_mcp_001");
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/mcp/tickets/00000000-0000-0000-0000",
+      headers: { Authorization: "Bearer valid.machine.token" },
+    });
+
+    expect(res.statusCode).toBe(400);
+  });
+});

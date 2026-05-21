@@ -509,3 +509,128 @@ describe("Notifications", () => {
     expect(accepted.length).toBeGreaterThan(0);
   });
 });
+
+// ── P2-A: DB-level unique constraint path ─────────────────────────────────────
+//
+// These tests verify the second layer of the concurrent-pending guard: the DB
+// partial unique index (0006) catches a second pending INSERT even when two
+// concurrent requests both pass the SELECT fast-path.
+//
+// We test this by: inserting a pending row directly (bypassing the service
+// SELECT check) and then trying to INSERT a second pending row — confirming the
+// index fires and the service maps it to a _conflict result.
+
+describe("P2-A: DB-level partial unique index on pending reassignments", () => {
+  it("direct insert of a duplicate pending row violates the unique index", async () => {
+    await resetTicket();
+
+    // Insert one pending row directly via Drizzle (not through the service)
+    await db.insert(reassignments).values({
+      ticketId: testTicketId,
+      proposer: SE_PROPOSER,
+      recipient: SE_RECIPIENT,
+      status: "pending",
+    });
+
+    // A second direct INSERT of a pending row for the same ticket must fail
+    // with Postgres error code 23505 (unique_violation).
+    let caught: unknown;
+    try {
+      await db.insert(reassignments).values({
+        ticketId: testTicketId,
+        proposer: SE_PROPOSER,
+        recipient: SE_RECIPIENT,
+        status: "pending",
+      });
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).toBeDefined();
+    expect((caught as { code?: string }).code).toBe("23505");
+
+    // Cleanup
+    await db.delete(reassignments).where(eq(reassignments.ticketId, testTicketId));
+  });
+
+  it("second accepted row for the same ticket is allowed (index is partial: pending only)", async () => {
+    await resetTicket();
+
+    // Insert one accepted row directly
+    await db.insert(reassignments).values({
+      ticketId: testTicketId,
+      proposer: SE_PROPOSER,
+      recipient: SE_RECIPIENT,
+      status: "accepted",
+      resolvedAt: new Date(),
+    });
+
+    // A second accepted row must NOT violate the index (non-pending rows are excluded)
+    await expect(
+      db.insert(reassignments).values({
+        ticketId: testTicketId,
+        proposer: SE_PROPOSER,
+        recipient: SE_RECIPIENT,
+        status: "accepted",
+        resolvedAt: new Date(),
+      })
+    ).resolves.toBeDefined();
+
+    // Cleanup
+    await db.delete(reassignments).where(eq(reassignments.ticketId, testTicketId));
+  });
+});
+
+// ── P2-D: Guarded accept/reject — stale-conflict path ────────────────────────
+//
+// These tests verify that a second accept or a reject-after-accept returns the
+// stale-conflict result rather than silently succeeding.
+
+describe("P2-D: Guarded accept/reject — stale-conflict path", () => {
+  it("second accept of an already-accepted row returns stale", async () => {
+    await resetTicket();
+
+    const initResult = await initiateReassignment(
+      db,
+      testTicketId,
+      SE_PROPOSER,
+      SE_RECIPIENT,
+      "se"
+    );
+    const id = initResult.reassignment!.id;
+
+    // First accept — should succeed
+    const first = await acceptReassignment(db, id, SE_RECIPIENT);
+    expect(first.ok).toBe(true);
+
+    // Manually reset the row back to "accepted" so the second accept sees a
+    // non-pending row (simulates arriving after first accept committed).
+    // The second accept must return stale (row no longer pending).
+    const second = await acceptReassignment(db, id, SE_RECIPIENT);
+    expect(second.ok).toBe(false);
+    // Either the select-path error or the stale guard — both are "already accepted"
+    expect(second.error).toMatch(/already (accepted|resolved)/i);
+  });
+
+  it("reject-after-accept returns stale", async () => {
+    await resetTicket();
+
+    const initResult = await initiateReassignment(
+      db,
+      testTicketId,
+      SE_PROPOSER,
+      SE_RECIPIENT,
+      "se"
+    );
+    const id = initResult.reassignment!.id;
+
+    // Accept first
+    const acceptResult = await acceptReassignment(db, id, SE_RECIPIENT);
+    expect(acceptResult.ok).toBe(true);
+
+    // Now attempt to reject the already-accepted row
+    const rejectResult = await rejectReassignment(db, id, SE_RECIPIENT);
+    expect(rejectResult.ok).toBe(false);
+    expect(rejectResult.error).toMatch(/already (accepted|resolved)/i);
+  });
+});

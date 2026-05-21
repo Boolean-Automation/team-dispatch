@@ -176,4 +176,22 @@ describe("GET /api/tickets/:id", () => {
 
     expect(res.status).toBe(404);
   });
+
+  // P3-A: malformed id (neither UUID nor DSP-####) must return 400, not 500
+  it("returns 400 for a malformed ticket id (P3-A)", async () => {
+    const res = await request(fastify.server)
+      .get("/api/tickets/not-a-valid-id")
+      .set("Authorization", "Bearer valid-token");
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toContain("Invalid ticket id");
+  });
+
+  it("returns 400 for a partial UUID (P3-A)", async () => {
+    const res = await request(fastify.server)
+      .get("/api/tickets/00000000-0000-0000-0000")
+      .set("Authorization", "Bearer valid-token");
+
+    expect(res.status).toBe(400);
+  });
 });

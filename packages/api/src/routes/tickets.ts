@@ -76,13 +76,29 @@ export default async function ticketRoutes(
 
   // GET /api/tickets/:id
   // Accepts both UUID and display id (DSP-XXXX) — P1-D fix.
+  // P3-A: validate id format before routing to prevent a Postgres UUID-syntax
+  // error from reaching the caller as a 500.
   fastify.get<TicketByIdRoute>(
     "/api/tickets/:id",
     { preHandler: requireClerkSession },
     async (request, reply) => {
       const { id } = request.params;
-      // Detect DSP- prefix (case-insensitive) → look up by display id
-      const dto = /^dsp-/i.test(id)
+
+      const isDsp = /^DSP-\d+$/i.test(id);
+      const isUuid =
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+          id
+        );
+
+      if (!isDsp && !isUuid) {
+        return reply.status(400).send({
+          error: "Bad Request",
+          message: "Invalid ticket id",
+          statusCode: 400,
+        });
+      }
+
+      const dto = isDsp
         ? await getTicketByDisplayId(fastify.db, id.toUpperCase())
         : await getTicket(fastify.db, id);
 

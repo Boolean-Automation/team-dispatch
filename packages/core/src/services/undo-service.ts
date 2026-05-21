@@ -87,14 +87,35 @@ export async function undoByToken(db: Db, token: string): Promise<UndoResult> {
       .where(eq(tickets.id, entry.ticketId));
     action = "ticket.dismissed";
   } else if (event === "ticket.status_changed") {
+    // P2-B: restore all SLA side-effect columns from the before payload, not
+    // just status. Omitting these leaves waiting_client_since_at / follow_up_1_sent_at
+    // / resolved_at stamped on a ticket whose status no longer justifies them,
+    // or restores a status without its required timer column.
     if (!entry.ticketId) return { ok: false, reason: "not-undoable" };
-    const before = entry.before as { status?: string } | null;
+    const before = entry.before as {
+      status?: string;
+      waitingClientSinceAt?: string | null;
+      followUp1SentAt?: string | null;
+      resolvedAt?: string | null;
+    } | null;
     if (!before?.status) return { ok: false, reason: "not-undoable" };
     await db
       .update(tickets)
       .set({
         status: before.status as typeof tickets.$inferInsert["status"],
         updatedAt: new Date(),
+        // Restore SLA columns if they were recorded in the audit before payload.
+        // "undefined" means the key was absent (old audit entries before P2-B) —
+        // leave the column as-is in that case. null means explicitly cleared.
+        ...(before.waitingClientSinceAt !== undefined
+          ? { waitingClientSinceAt: before.waitingClientSinceAt ? new Date(before.waitingClientSinceAt) : null }
+          : {}),
+        ...(before.followUp1SentAt !== undefined
+          ? { followUp1SentAt: before.followUp1SentAt ? new Date(before.followUp1SentAt) : null }
+          : {}),
+        ...(before.resolvedAt !== undefined
+          ? { resolvedAt: before.resolvedAt ? new Date(before.resolvedAt) : null }
+          : {}),
       })
       .where(eq(tickets.id, entry.ticketId));
     action = "ticket.status_changed";
@@ -233,10 +254,16 @@ export async function undoByToken(db: Db, token: string): Promise<UndoResult> {
     //      the ticket status. Slack already posted it. Append an audit entry
     //      noting the undo-too-late result and return "undo-too-late" to the caller.
     //   3. If the cancel UPDATE succeeded, delete the message record and revert
-    //      the ticket status (if the send had resolved it).
+    //      the ticket status (if the send had resolved it), including all SLA
+    //      side-effect columns recorded in the before payload (P2-C).
     //
     // OQ-4: we never delete a Slack message; the Slack post is left in-place.
-    const before = entry.before as { status?: string } | null;
+    const before = entry.before as {
+      status?: string;
+      waitingClientSinceAt?: string | null;
+      followUp1SentAt?: string | null;
+      resolvedAt?: string | null;
+    } | null;
 
     if (!msgAfter?.messageId) return { ok: false, reason: "not-undoable" };
 
@@ -288,14 +315,26 @@ export async function undoByToken(db: Db, token: string): Promise<UndoResult> {
         .delete(messages)
         .where(eq(messages.id, messageId));
 
-      // Revert ticket status if the send also resolved the ticket
+      // Revert ticket status if the send also changed it, restoring all SLA
+      // side-effect columns from the before payload (P2-C).
       if (msgAfter.resolvedTicket && entry.ticketId && before?.status) {
         await tx
           .update(tickets)
           .set({
             status: before.status as typeof tickets.$inferInsert["status"],
-            resolvedAt: null,
             updatedAt: new Date(),
+            // Restore SLA side-effect columns from the audit before payload.
+            // "undefined" key means the field was absent in the before payload
+            // (old audit entries pre-P2-C) — leave column as-is.
+            ...(before.waitingClientSinceAt !== undefined
+              ? { waitingClientSinceAt: before.waitingClientSinceAt ? new Date(before.waitingClientSinceAt) : null }
+              : {}),
+            ...(before.followUp1SentAt !== undefined
+              ? { followUp1SentAt: before.followUp1SentAt ? new Date(before.followUp1SentAt) : null }
+              : {}),
+            ...(before.resolvedAt !== undefined
+              ? { resolvedAt: before.resolvedAt ? new Date(before.resolvedAt) : null }
+              : {}),
           })
           .where(eq(tickets.id, entry.ticketId));
       }

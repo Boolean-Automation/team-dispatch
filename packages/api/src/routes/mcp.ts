@@ -59,12 +59,29 @@ export default async function mcpRoutes(
 
   // GET /api/mcp/tickets/:id
   // Accepts both UUID and DSP- display id (mirrors the session route fix).
+  // P3-A: validate id format before routing to prevent a Postgres UUID-syntax
+  // error from reaching the caller as a 500.
   fastify.get<McpByIdRoute>(
     "/api/mcp/tickets/:id",
     { preHandler: requireMachineCredential },
     async (request, reply) => {
       const { id } = request.params;
-      const dto = /^dsp-/i.test(id)
+
+      const isDsp = /^DSP-\d+$/i.test(id);
+      const isUuid =
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+          id
+        );
+
+      if (!isDsp && !isUuid) {
+        return reply.status(400).send({
+          error: "Bad Request",
+          message: "Invalid ticket id",
+          statusCode: 400,
+        });
+      }
+
+      const dto = isDsp
         ? await getTicketByDisplayId(fastify.db, id.toUpperCase())
         : await getTicket(fastify.db, id);
 

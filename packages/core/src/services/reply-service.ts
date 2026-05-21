@@ -87,6 +87,8 @@ export async function sendReply(opts: SendReplyOpts): Promise<SendReplyResult> {
 
   // Verify the ticket exists and get its source_channel_id + source_event_ts
   // (source_event_ts is needed for Slack thread reply — P2-I)
+  // Also fetch SLA side-effect columns so they can be recorded in the audit
+  // before payload for accurate undo (P2-C).
   const ticketRows = await db
     .select({
       id: tickets.id,
@@ -94,6 +96,9 @@ export async function sendReply(opts: SendReplyOpts): Promise<SendReplyResult> {
       sourceEventTs: tickets.sourceEventTs,
       status: tickets.status,
       firstResponseAt: tickets.firstResponseAt,
+      waitingClientSinceAt: tickets.waitingClientSinceAt,
+      followUp1SentAt: tickets.followUp1SentAt,
+      resolvedAt: tickets.resolvedAt,
     })
     .from(tickets)
     .where(eq(tickets.id, ticketId))
@@ -204,12 +209,21 @@ export async function sendReply(opts: SendReplyOpts): Promise<SendReplyResult> {
         .where(eq(tickets.id, ticketId));
     }
 
-    // Append audit log entry (message.created) with undo token
+    // Append audit log entry (message.created) with undo token.
+    // P2-C: include SLA side-effect columns in the before payload so the undo
+    // handler can clear/restore them atomically with the status revert.
     await appendAudit(tx, {
       ticketId,
       actorId,
       event: "message.created",
-      before: targetStatus ? { status: prevStatus } : null,
+      before: targetStatus
+        ? {
+            status: prevStatus,
+            waitingClientSinceAt: ticket.waitingClientSinceAt?.toISOString() ?? null,
+            followUp1SentAt: ticket.followUp1SentAt?.toISOString() ?? null,
+            resolvedAt: ticket.resolvedAt?.toISOString() ?? null,
+          }
+        : null,
       after: {
         messageId: messageRow.id,
         direction: "outbound",

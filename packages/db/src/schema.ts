@@ -355,20 +355,36 @@ export const auditLog = pgTable("audit_log", {
 // While pending, tickets.assignee does NOT change (stays with original SE).
 // On accept → assignee moves to recipient. On reject → stays with original SE.
 // Schema defined here; SQL migration ships in Slice 7 (0004).
+//
+// The partial unique index "reassignments_one_pending_per_ticket" (0006) ensures
+// at most one 'pending' row per ticket_id at the DB level so the constraint holds
+// under READ COMMITTED concurrent inserts (P2-A).
 
-export const reassignments = pgTable("reassignments", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  ticketId: uuid("ticket_id")
-    .notNull()
-    .references(() => tickets.id, { onDelete: "cascade" }),
-  proposer: text("proposer").notNull(), // Clerk user id
-  recipient: text("recipient").notNull(), // Clerk user id
-  status: reassignmentStatusEnum("status").notNull().default("pending"),
-  createdAt: timestamp("created_at", { withTimezone: true })
-    .notNull()
-    .defaultNow(),
-  resolvedAt: timestamp("resolved_at", { withTimezone: true }),
-});
+export const reassignments = pgTable(
+  "reassignments",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    ticketId: uuid("ticket_id")
+      .notNull()
+      .references(() => tickets.id, { onDelete: "cascade" }),
+    proposer: text("proposer").notNull(), // Clerk user id
+    recipient: text("recipient").notNull(), // Clerk user id
+    status: reassignmentStatusEnum("status").notNull().default("pending"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+  },
+  (t) => ({
+    // Partial unique index matching 0006_reassignment_one_pending.sql:
+    // WHERE status = 'pending'
+    // Drizzle schema parity so a future drizzle-kit run cannot drift from the
+    // SQL definition — same pattern as contacts/tickets/messages (P2-A).
+    onePendingPerTicket: uniqueIndex("reassignments_one_pending_per_ticket")
+      .on(t.ticketId)
+      .where(sql`${t.status} = 'pending'`),
+  })
+);
 
 // ── reinforcements ─────────────────────────────────────────────────────────────
 //

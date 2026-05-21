@@ -365,6 +365,43 @@ export async function requireMachineCredential(
     });
   }
 
+  // P2-E: validate required claim shapes explicitly.
+  // jwt.verify() checks exp/iss/aud/sig but does NOT enforce that sub is a
+  // non-empty string, that role is one of the allowed values, or that iat/exp
+  // are numbers. A token with sub: undefined or role: "superuser" would pass
+  // the jwt.verify check and reach the assignee at request.auth.userId.
+  if (typeof claims.sub !== "string" || claims.sub.length === 0) {
+    return reply.status(401).send({
+      error: "Unauthorized",
+      message: "Invalid machine credential: invalid claim shape (sub)",
+      statusCode: 401,
+    });
+  }
+
+  if (claims.role !== "admin" && claims.role !== "se") {
+    return reply.status(401).send({
+      error: "Unauthorized",
+      message: "Invalid machine credential: invalid claim shape (role)",
+      statusCode: 401,
+    });
+  }
+
+  if (typeof claims.exp !== "number") {
+    return reply.status(401).send({
+      error: "Unauthorized",
+      message: "Invalid machine credential: invalid claim shape (exp)",
+      statusCode: 401,
+    });
+  }
+
+  if (typeof claims.iat !== "number") {
+    return reply.status(401).send({
+      error: "Unauthorized",
+      message: "Invalid machine credential: invalid claim shape (iat)",
+      statusCode: 401,
+    });
+  }
+
   const userId = claims.sub;
   const role: DispatchRole = claims.role === "admin" ? "admin" : "se";
 

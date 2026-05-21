@@ -195,9 +195,17 @@ export async function updateTicketStatus(
   targetStatus: TicketStatus,
   actorId: string
 ): Promise<UpdateTicketStatusResult> {
-  // Fetch current ticket
+  // Fetch current ticket — include all SLA side-effect columns so we can
+  // record their before values in the audit log (P2-B: undo needs to restore them)
   const rows = await db
-    .select({ id: tickets.id, status: tickets.status, effortBucket: tickets.effortBucket, waitingClientSinceAt: tickets.waitingClientSinceAt })
+    .select({
+      id: tickets.id,
+      status: tickets.status,
+      effortBucket: tickets.effortBucket,
+      waitingClientSinceAt: tickets.waitingClientSinceAt,
+      followUp1SentAt: tickets.followUp1SentAt,
+      resolvedAt: tickets.resolvedAt,
+    })
     .from(tickets)
     .where(eq(tickets.id, ticketId))
     .limit(1);
@@ -266,13 +274,26 @@ export async function updateTicketStatus(
     })
     .where(eq(tickets.id, ticketId));
 
-  // Audit log
+  // Audit log — include SLA side-effect columns in before/after so the undo
+  // handler can restore them atomically (P2-B).
   await appendAudit(db, {
     ticketId,
     actorId,
     event: "ticket.status_changed",
-    before: { status: fromStatus },
-    after: { status: targetStatus },
+    before: {
+      status: fromStatus,
+      waitingClientSinceAt: ticket.waitingClientSinceAt?.toISOString() ?? null,
+      followUp1SentAt: ticket.followUp1SentAt?.toISOString() ?? null,
+      resolvedAt: ticket.resolvedAt?.toISOString() ?? null,
+    },
+    after: {
+      status: targetStatus,
+      waitingClientSinceAt: waitingClientSinceAt instanceof Date
+        ? waitingClientSinceAt.toISOString()
+        : (waitingClientSinceAt === null ? null : undefined),
+      followUp1SentAt: followUp1SentAt?.toISOString() ?? null,
+      resolvedAt: resolvedAt?.toISOString() ?? null,
+    },
     undoToken,
   });
 

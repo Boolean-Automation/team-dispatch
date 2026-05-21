@@ -15,6 +15,8 @@ import type { Db } from "../../db/src/client.js";
 import { undoByToken, generateUndoToken } from "../src/services/undo-service.js";
 import { appendAudit } from "../src/services/audit-service.js";
 import { insertOutboxRow, claimOutboxRow } from "../src/services/outbox-service.js";
+import { updateTicketStatus } from "../src/services/ticket-service.js";
+import { sendReply } from "../src/services/reply-service.js";
 
 const DATABASE_URL =
   process.env.TEST_DATABASE_URL ??
@@ -327,5 +329,166 @@ describe("undoByToken — message.created TOCTOU race (P1-1)", () => {
     // Cleanup
     await db.delete(slackOutbox).where(eq(slackOutbox.id, outboxRow.id));
     await db.delete(messages).where(eq(messages.id, msg.id));
+  });
+});
+
+// ── P2-B: ticket.status_changed undo restores SLA side-effect columns ─────────
+//
+// Undoing on-you → waiting-client must clear waiting_client_since_at.
+// Undoing waiting-client → on-you must restore waiting_client_since_at to its
+// prior value so the SLA timer still tracks it.
+
+describe("undoByToken — ticket.status_changed SLA columns (P2-B)", () => {
+  it("undo of on-you → waiting-client clears waiting_client_since_at", async () => {
+    // Seed ticket in on-you
+    const ticket = await seedTicket(db, testAccountId, "on-you");
+
+    // Transition to waiting-client via the service (stamps waiting_client_since_at)
+    const result = await updateTicketStatus(
+      db,
+      ticket.id,
+      "waiting-client",
+      "user_se_test"
+    );
+    expect(result.ok).toBe(true);
+
+    // Verify waiting_client_since_at is set
+    const afterTransition = await db
+      .select({ waitingClientSinceAt: tickets.waitingClientSinceAt })
+      .from(tickets)
+      .where(eq(tickets.id, ticket.id))
+      .limit(1);
+    expect(afterTransition[0]?.waitingClientSinceAt).not.toBeNull();
+
+    // Undo the transition
+    const undoResult = await undoByToken(db, result.undoToken!);
+    expect(undoResult.ok).toBe(true);
+
+    // After undo, status should be on-you and waiting_client_since_at cleared
+    const afterUndo = await db
+      .select({ status: tickets.status, waitingClientSinceAt: tickets.waitingClientSinceAt })
+      .from(tickets)
+      .where(eq(tickets.id, ticket.id))
+      .limit(1);
+    expect(afterUndo[0]?.status).toBe("on-you");
+    expect(afterUndo[0]?.waitingClientSinceAt).toBeNull();
+  });
+
+  it("undo of waiting-client → on-you restores waiting_client_since_at", async () => {
+    // Seed ticket in on-you, then manually stamp waiting_client_since_at
+    const ticket = await seedTicket(db, testAccountId, "on-you");
+    const originalWcAt = new Date("2026-01-01T10:00:00Z");
+
+    // Set to waiting-client with a known stamp (via service so audit is correct)
+    const toWaiting = await updateTicketStatus(
+      db,
+      ticket.id,
+      "waiting-client",
+      "user_se_test"
+    );
+    expect(toWaiting.ok).toBe(true);
+
+    // Override waiting_client_since_at to a known value for assertion
+    await db
+      .update(tickets)
+      .set({ waitingClientSinceAt: originalWcAt })
+      .where(eq(tickets.id, ticket.id));
+
+    // Also update the audit before payload to capture this known timestamp
+    // (patch the audit entry's before.waitingClientSinceAt to null since from
+    // on-you there was no prior stamp — that's what the audit records)
+    // This test instead transitions waiting-client → on-you and undoes that.
+
+    // Transition FROM waiting-client (clears waiting_client_since_at)
+    const toOnYou = await updateTicketStatus(
+      db,
+      ticket.id,
+      "on-you",
+      "user_se_test"
+    );
+    expect(toOnYou.ok).toBe(true);
+
+    // Verify waiting_client_since_at was cleared by the transition
+    const midState = await db
+      .select({ waitingClientSinceAt: tickets.waitingClientSinceAt })
+      .from(tickets)
+      .where(eq(tickets.id, ticket.id))
+      .limit(1);
+    expect(midState[0]?.waitingClientSinceAt).toBeNull();
+
+    // Undo the waiting-client → on-you transition
+    const undoResult = await undoByToken(db, toOnYou.undoToken!);
+    expect(undoResult.ok).toBe(true);
+
+    // After undo: status restored to waiting-client; waiting_client_since_at
+    // restored to the value captured in the audit before payload.
+    const afterUndo = await db
+      .select({ status: tickets.status, waitingClientSinceAt: tickets.waitingClientSinceAt })
+      .from(tickets)
+      .where(eq(tickets.id, ticket.id))
+      .limit(1);
+    expect(afterUndo[0]?.status).toBe("waiting-client");
+    // The before payload for the second transition records the stamp that was
+    // set by the first transition (the originalWcAt we applied).
+    expect(afterUndo[0]?.waitingClientSinceAt).not.toBeNull();
+  });
+});
+
+// ── P2-C: message.created undo restores SLA side-effect columns ───────────────
+//
+// Undoing a Send & resolve (on-you → waiting-client) must clear
+// waiting_client_since_at that the reply stamped.
+
+describe("undoByToken — message.created SLA columns (P2-C)", () => {
+  it("undo of send-and-resolve (on-you → waiting-client) clears waiting_client_since_at", async () => {
+    // Seed a ticket in on-you with a source channel (needed by sendReply)
+    const ticketRows = await db
+      .insert(tickets)
+      .values({
+        accountId: testAccountId,
+        status: "on-you",
+        type: "question",
+        sourceKind: "channel",
+        sourceChannelId: "C_UNDO_SLA_TEST",
+        originClass: "client",
+      })
+      .returning();
+    const ticket = ticketRows[0]!;
+
+    // Send a reply with resolveTicket=true (on-you → waiting-client)
+    const replyResult = await sendReply({
+      db,
+      ticketId: ticket.id,
+      actorId: "user_se_test",
+      body: "SLA undo test reply",
+      actorName: "SE Test",
+      resolveTicket: true,
+      undoWindowSecs: 30,
+    });
+
+    // Verify waiting_client_since_at is stamped
+    const afterSend = await db
+      .select({ status: tickets.status, waitingClientSinceAt: tickets.waitingClientSinceAt })
+      .from(tickets)
+      .where(eq(tickets.id, ticket.id))
+      .limit(1);
+    expect(afterSend[0]?.status).toBe("waiting-client");
+    expect(afterSend[0]?.waitingClientSinceAt).not.toBeNull();
+
+    // Undo the send (outbox row is still pending — within window)
+    const undoResult = await undoByToken(db, replyResult.undoToken);
+    expect(undoResult.ok).toBe(true);
+
+    // After undo: status reverted to on-you; waiting_client_since_at cleared
+    const afterUndo = await db
+      .select({ status: tickets.status, waitingClientSinceAt: tickets.waitingClientSinceAt })
+      .from(tickets)
+      .where(eq(tickets.id, ticket.id))
+      .limit(1);
+    expect(afterUndo[0]?.status).toBe("on-you");
+    expect(afterUndo[0]?.waitingClientSinceAt).toBeNull();
+
+    // Cleanup
+    await db.delete(tickets).where(eq(tickets.id, ticket.id));
   });
 });
