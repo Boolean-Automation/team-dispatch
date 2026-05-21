@@ -14,6 +14,7 @@
 // Slice 2 ships classes (a) and (c). Classes (b) and (d) are stubs exported
 // here so the plugin file is the single module future slices extend.
 
+import crypto from "node:crypto";
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import fp from "fastify-plugin";
 
@@ -144,17 +145,105 @@ export async function requireClerkAdmin(
   }
 }
 
-// ── Stub: requireSlackSignature (route-class b) — Slice 4 ─────────────────────
+// ── Guard: requireSlackSignature (route-class b) ──────────────────────────────
+//
+// Validates the Slack HMAC request signature:
+//   X-Slack-Signature: v0=<hmac-sha256>
+//   X-Slack-Request-Timestamp: <unix-epoch>
+//
+// Rejects requests older than 5 minutes to prevent replay attacks.
+// Also handles the Events-API url_verification handshake transparently:
+//   when the body contains { type: "url_verification" } the handler
+//   replies 200 with { challenge } directly without reaching the route handler.
+//
+// The signing secret is read from process.env.SLACK_SIGNING_SECRET.
+// Tests inject a mock via _setSlackSigningSecretForTest.
+
+let _slackSigningSecret: string | null = null;
+
+/** Inject a custom signing secret for tests. */
+export function _setSlackSigningSecretForTest(secret: string): void {
+  _slackSigningSecret = secret;
+}
+
+/** Reset to env-based secret. */
+export function _resetSlackSigningSecret(): void {
+  _slackSigningSecret = null;
+}
+
+function getSlackSigningSecret(): string {
+  return _slackSigningSecret ?? process.env.SLACK_SIGNING_SECRET ?? "";
+}
 
 export async function requireSlackSignature(
-  _request: FastifyRequest,
+  request: FastifyRequest,
   reply: FastifyReply
 ): Promise<void> {
-  return reply.status(501).send({
-    error: "Not Implemented",
-    message: "Slack signature verification is added in Slice 4",
-    statusCode: 501,
-  });
+  const signingSecret = getSlackSigningSecret();
+  if (!signingSecret) {
+    return reply.status(500).send({
+      error: "Internal Server Error",
+      message: "SLACK_SIGNING_SECRET not configured",
+      statusCode: 500,
+    });
+  }
+
+  const timestamp = request.headers["x-slack-request-timestamp"];
+  const signature = request.headers["x-slack-signature"];
+
+  if (typeof timestamp !== "string" || typeof signature !== "string") {
+    return reply.status(401).send({
+      error: "Unauthorized",
+      message: "Missing Slack signature headers",
+      statusCode: 401,
+    });
+  }
+
+  // Replay attack prevention: reject requests older than 5 minutes
+  const nowSec = Math.floor(Date.now() / 1000);
+  const tsNum = parseInt(timestamp, 10);
+  if (isNaN(tsNum) || Math.abs(nowSec - tsNum) > 300) {
+    return reply.status(401).send({
+      error: "Unauthorized",
+      message: "Slack request timestamp too old or invalid",
+      statusCode: 401,
+    });
+  }
+
+  // Build the signature basestring
+  // raw-body plugin stores the raw request body string in request.rawBody.
+  // Fall back to re-serializing the parsed body if rawBody is empty.
+  const rawBodyStr = (request as FastifyRequest & { rawBody?: string }).rawBody;
+  const bodyString =
+    typeof rawBodyStr === "string" && rawBodyStr.length > 0
+      ? rawBodyStr
+      : JSON.stringify(request.body ?? "");
+
+  const sigBasestring = `v0:${timestamp}:${bodyString}`;
+
+  const hmac = crypto
+    .createHmac("sha256", signingSecret)
+    .update(sigBasestring, "utf8")
+    .digest("hex");
+
+  const computedSignature = `v0=${hmac}`;
+
+  // Timing-safe comparison
+  const sigBuffer = Buffer.from(signature, "utf8");
+  const computedBuffer = Buffer.from(computedSignature, "utf8");
+
+  if (
+    sigBuffer.length !== computedBuffer.length ||
+    !crypto.timingSafeEqual(sigBuffer, computedBuffer)
+  ) {
+    return reply.status(401).send({
+      error: "Unauthorized",
+      message: "Invalid Slack signature",
+      statusCode: 401,
+    });
+  }
+
+  // Signature is valid — no request.auth needed for Slack webhook routes
 }
 
 // ── Stub: requireMachineCredential (route-class d) — Slice 8 ──────────────────

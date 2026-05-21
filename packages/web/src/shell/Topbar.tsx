@@ -1,10 +1,12 @@
 // dispatch — Topbar component (Issues Board view)
 // Ported from app.jsx Topbar + FilterChip + SortChip.
+// Slice 4: adds NotificationBell + "New ticket" action.
 
 import React, { useEffect, useRef, useState } from "react";
-import Ic from "./Ic";
-import type { BoardFilters, SortMode } from "../lib/types";
-import { ACCOUNTS, ENGINEERS } from "../lib/seed";
+import Ic from "./Ic.js";
+import { NotificationBell } from "./NotificationBell.js";
+import type { BoardFilters, SortMode } from "../lib/types.js";
+import { ACCOUNTS, ENGINEERS } from "../lib/seed.js";
 
 // ── FilterChip ────────────────────────────────────────────────────────────────
 
@@ -152,6 +154,68 @@ function SortChip({ value, onChange }: SortChipProps) {
   );
 }
 
+// ── NewTicketButton ───────────────────────────────────────────────────────────
+//
+// Opens a minimal inline dialog to create a hand-crafted ticket.
+// Slice 4: fires POST /api/tickets + shows an undo toast.
+
+function NewTicketButton() {
+  const [open, setOpen] = useState(false);
+  const [accountId, setAccountId] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  const handleSubmit = async () => {
+    if (!accountId.trim()) return;
+    setSubmitting(true);
+    try {
+      const res = await fetch("/api/tickets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ accountId }),
+      });
+      if (res.ok) {
+        setOpen(false);
+        setAccountId("");
+      }
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div style={{ position: "relative" }}>
+      <button className="btn-primary" onClick={() => setOpen((o) => !o)}>
+        <Ic.plus /> New ticket
+      </button>
+      {open && (
+        <div className="pop" style={{ right: 0, width: 260, padding: "12px" }}>
+          <div style={{ marginBottom: 8, fontWeight: 600 }}>New ticket</div>
+          <input
+            className="pop-input"
+            placeholder="Account ID or slug"
+            value={accountId}
+            onChange={(e) => setAccountId(e.target.value)}
+            style={{ width: "100%", marginBottom: 8 }}
+            autoFocus
+          />
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+            <button className="btn-ghost" onClick={() => setOpen(false)}>
+              Cancel
+            </button>
+            <button
+              className="btn-primary"
+              onClick={() => void handleSubmit()}
+              disabled={submitting || !accountId.trim()}
+            >
+              {submitting ? "Creating…" : "Create"}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Topbar ────────────────────────────────────────────────────────────────────
 
 interface TopbarProps {
@@ -230,12 +294,8 @@ export function Topbar({
       </div>
 
       <div className="topbar-actions">
-        <button className="btn-ghost" title="Notifications">
-          <Ic.bell />
-        </button>
-        <button className="btn-primary">
-          <Ic.plus /> New ticket
-        </button>
+        <NotificationBell />
+        <NewTicketButton />
       </div>
     </div>
   );

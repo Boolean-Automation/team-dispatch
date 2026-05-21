@@ -191,7 +191,10 @@ export const tickets = pgTable(
   "tickets",
   {
     id: uuid("id").defaultRandom().primaryKey(),
-    displayId: text("display_id").notNull().unique(),
+    displayId: text("display_id")
+      .notNull()
+      .unique()
+      .default(sql`'DSP-' || nextval('ticket_display_seq')::text`),
     // Generated as 'DSP-' || nextval('ticket_display_seq') in 0000_init.sql
     accountId: uuid("account_id")
       .notNull()

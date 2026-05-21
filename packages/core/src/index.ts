@@ -12,9 +12,20 @@ export * from "./entities/ticket.js";
 
 // ── Services ──────────────────────────────────────────────────────────────────
 export * from "./services/account-service.js";
+export * from "./services/audit-service.js";
+export * from "./services/contact-discovery.js";
 export * from "./services/contact-service.js";
 export * from "./services/message-service.js";
+export * from "./services/notification-service.js";
+export * from "./services/routing.js";
 export * from "./services/ticket-service.js";
+export * from "./services/undo-service.js";
+
+// ── Ingestion ──────────────────────────────────────────────────────────────────
+export * from "./ingestion/types.js";
+export * from "./ingestion/ingest-message.js";
+export * from "./ingestion/adapters/slack-webhook.js";
+export * from "./ingestion/adapters/stub-feeder.js";
 
 // ── Registry ──────────────────────────────────────────────────────────────────
 export * from "./registry/build-registry.js";

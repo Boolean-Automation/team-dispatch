@@ -1,12 +1,14 @@
 // dispatch — Kanban card component
 // Ported from app.jsx Card function.
+// Slice 4: adds dismiss affordance (undoable via POST /api/tickets/:id/dismiss).
 
 import React from "react";
 import { Link } from "react-router-dom";
-import { Avatar } from "../shell/Avatar";
-import { fmtAge, fmtSla, slaClass } from "../shell/format";
-import { HEALTH_LABEL } from "../lib/seed";
-import type { Ticket } from "../lib/types";
+import { Avatar } from "../shell/Avatar.js";
+import { fmtAge, fmtSla, slaClass } from "../shell/format.js";
+import { HEALTH_LABEL } from "../lib/seed.js";
+import type { Ticket } from "../lib/types.js";
+import { useUndoableMutation } from "../lib/use-undoable-mutation.js";
 
 interface TagProps {
   type: Ticket["type"];
@@ -20,11 +22,34 @@ interface CardProps {
   ticket: Ticket;
   focused?: boolean;
   onFocus?: () => void;
+  onDismissed?: (ticketId: string) => void;
 }
 
-export function Card({ ticket: t, focused = false, onFocus }: CardProps) {
+export function Card({ ticket: t, focused = false, onFocus, onDismissed }: CardProps) {
   const sla = fmtSla(t.slaMin);
   const cls = slaClass(t);
+
+  const dismissMutation = useUndoableMutation<{ ok: boolean; undoToken: string }, string>({
+    mutationFn: async (ticketId: string) => {
+      const res = await fetch(`/api/tickets/${ticketId}/dismiss`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+      if (!res.ok) throw new Error(`Dismiss failed: ${res.status}`);
+      return res.json() as Promise<{ ok: boolean; undoToken: string }>;
+    },
+    toastLabel: "Ticket dismissed",
+    invalidateKeys: [["tickets"]],
+    onSuccess: (_data, ticketId) => {
+      onDismissed?.(ticketId);
+    },
+  });
+
+  const handleDismiss = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dismissMutation.mutate(t.id);
+  };
 
   return (
     <Link
@@ -35,6 +60,15 @@ export function Card({ ticket: t, focused = false, onFocus }: CardProps) {
       <div className="card-head">
         <div className="card-client">{t.clientName}</div>
         <div className="card-id mono">{t.displayId}</div>
+        <button
+          className="card-dismiss"
+          title="Dismiss ticket"
+          onClick={handleDismiss}
+          aria-label="Dismiss ticket"
+          style={{ marginLeft: "auto", opacity: 0.4, background: "none", border: "none", cursor: "pointer" }}
+        >
+          ×
+        </button>
       </div>
       <div className="card-preview">{t.preview}</div>
       <div className="card-foot">

@@ -6,16 +6,21 @@
 //
 // Slice 2 wires: error-handler, clerk-auth plugin, GET /api/me.
 // Slice 3 wires: db plugin, tickets/accounts/contacts read routes.
-// Slices 4–8 register additional route modules here.
+// Slice 4 wires: raw-body plugin, ingestion/undo/notifications/activity routes.
 
 import Fastify from "fastify";
 import errorHandlerPlugin from "./plugins/error-handler.js";
+import rawBodyPlugin from "./plugins/raw-body.js";
 import clerkAuthPlugin from "./plugins/clerk-auth.js";
 import dbPlugin from "./plugins/db.js";
 import meRoutes from "./routes/me.js";
 import ticketRoutes from "./routes/tickets.js";
 import accountRoutes from "./routes/accounts.js";
 import contactRoutes from "./routes/contacts.js";
+import ingestionRoutes from "./routes/ingestion.js";
+import undoRoutes from "./routes/undo.js";
+import notificationRoutes from "./routes/notifications.js";
+import activityRoutes from "./routes/activity.js";
 import type { Db } from "@dispatch/db";
 
 const PORT = Number(process.env.PORT ?? 3000);
@@ -35,6 +40,8 @@ export async function buildServer(opts: BuildServerOptions = {}) {
 
   // ── Plugins ──────────────────────────────────────────────────────────────────
   await fastify.register(errorHandlerPlugin);
+  // raw-body must be registered BEFORE clerk-auth and routes that need rawBody
+  await fastify.register(rawBodyPlugin);
   await fastify.register(clerkAuthPlugin);
   await fastify.register(dbPlugin, { db: opts.db });
 
@@ -43,6 +50,11 @@ export async function buildServer(opts: BuildServerOptions = {}) {
   await fastify.register(ticketRoutes);
   await fastify.register(accountRoutes);
   await fastify.register(contactRoutes);
+  // Slice 4 routes
+  await fastify.register(ingestionRoutes);
+  await fastify.register(undoRoutes);
+  await fastify.register(notificationRoutes);
+  await fastify.register(activityRoutes);
 
   // ── Health check ─────────────────────────────────────────────────────────────
   fastify.get("/health", async () => ({ ok: true }));
