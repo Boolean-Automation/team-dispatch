@@ -16,6 +16,7 @@ import {
   useAuth,
   useUser,
 } from "@clerk/clerk-react";
+import { setTokenProvider } from "./api-client.js";
 
 // The publishable key is injected at build time by Vite from the environment.
 // It's safe to expose to the browser (that's its purpose).
@@ -69,7 +70,23 @@ export function RequireAuth({ children }: RequireAuthProps) {
 
 // Internal: the actual Clerk-aware gate, only rendered when a key exists
 function AuthGate({ children }: { children: ReactNode }) {
-  const { isLoaded, isSignedIn } = useAuth();
+  const { isLoaded, isSignedIn, getToken } = useAuth();
+
+  // Wire the Clerk session token onto the shared api-client so every API
+  // request (board reads, AND the Companion `POST /api/companion/sessions`
+  // token mint the bridge depends on) carries `Authorization: Bearer`.
+  // Without this the api-client's _tokenProvider is never set and the API
+  // 401s every call. Spike #1 Slice 4 remediation — the integrated bridge
+  // cannot mint a Companion token otherwise.
+  //
+  // Set SYNCHRONOUSLY during render (not in an effect): children — including
+  // the ticket-detail page whose `useTicket` query fires on its first mount —
+  // must see a wired token provider before any queryFn runs. A useEffect
+  // races that first query, and `useTicket` does not retry a 4xx, so a
+  // racing 401 would permanently kill the query.
+  if (isSignedIn) {
+    setTokenProvider(() => getToken());
+  }
 
   if (!isLoaded) {
     // Avoid flash — render nothing until Clerk has checked session status

@@ -53,7 +53,10 @@ test.describe("Ticket Detail — fixture path", () => {
     await expect(tabs.locator("button.tab").filter({ hasText: /^Internal thread/ })).toBeVisible();
     await expect(tabs.locator("button.tab").filter({ hasText: /^Linked/ })).toBeVisible();
 
-    // Phase-2 gate: NO terminal/claude-code in the tab bar
+    // The Companion bridge lives in the RIGHT PANEL toolbar (Ic.terminal), not
+    // the chat tab bar. The tab bar itself stays Phase-1 — Chat / Internal
+    // thread / Linked only. (Spike #1 added the terminal to the r-toolbar; see
+    // the dedicated RToolbar test below.)
     const tabsText = await tabs.textContent();
     expect(tabsText?.toLowerCase()).not.toContain("terminal");
     expect(tabsText?.toLowerCase()).not.toContain("claude-code");
@@ -91,7 +94,7 @@ test.describe("Ticket Detail — fixture path", () => {
     ).toBeVisible();
   });
 
-  test("RToolbar shows Info + Activity icons but NOT a terminal/claude-code icon", async ({ page }) => {
+  test("RToolbar shows Info, claude-code, and Activity icons (Spike #1 wired the terminal)", async ({ page }) => {
     const toolbar = page.locator(".r-toolbar");
     await expect(toolbar).toBeVisible();
 
@@ -101,10 +104,20 @@ test.describe("Ticket Detail — fixture path", () => {
     // Activity log button (title="Activity log") from RToolbar.tsx
     await expect(toolbar.locator("[title='Activity log']")).toBeVisible();
 
-    // Phase-2 gate: no terminal button should be present
-    // RToolbar.tsx explicitly omits the terminal icon — verify it's truly absent
-    const terminalLocator = toolbar.locator("[title*='terminal' i], [title*='claude' i]");
-    await expect(terminalLocator).not.toBeVisible();
+    // Spike #1 — the Companion bridge — wires the claude-code (Ic.terminal)
+    // button between Info and Activity. RToolbar.tsx's Phase-1 "do not wire"
+    // placeholder was deliberately replaced. The button MUST now be present.
+    await expect(toolbar.locator("button[title='claude-code']")).toBeVisible();
+
+    // Order: Info / claude-code / Activity (surface-map toolbar order).
+    const buttonTitles = await toolbar.locator("button.r-tb").evaluateAll(
+      (els) => els.map((el) => el.getAttribute("title"))
+    );
+    const infoIdx = buttonTitles.indexOf("Ticket & client info");
+    const claudeIdx = buttonTitles.indexOf("claude-code");
+    const activityIdx = buttonTitles.indexOf("Activity log");
+    expect(infoIdx).toBeLessThan(claudeIdx);
+    expect(claudeIdx).toBeLessThan(activityIdx);
   });
 
   test("Phase-3 exclusions: no clock-in or billable controls in the header", async ({ page }) => {

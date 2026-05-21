@@ -569,6 +569,58 @@
 }
 @keyframes blink { 50% { opacity: 0; } }
 
+/* ===== TERMINAL PANEL — SPIKE #1 ADDITIONS ===== */
+/* Scoped to the terminal panel. Every value is an existing :root token —
+   no token re-definition, no .term* rewrite (AGENTS.md "do NOT re-tokenize"). */
+
+/* Neutral / off connection dot — extends the rail .conn-dot pattern from
+   shell.css (which ships emerald + .warn but no neutral variant). */
+.conn-dot.off { background: var(--text-3); box-shadow: none; }
+
+/* xterm.js mount host — flush inside .term-body's padding; xterm owns its own
+   scrollback so the host is overflow:hidden (avoids a double scrollbar). */
+.term-body .xterm-host { width: 100%; height: 100%; overflow: hidden; }
+
+/* Failure / empty states rendered inside .term-body (visual spec §3). */
+.term-fail {
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 10px;
+  min-height: 100%;
+  padding: 28px 24px;
+  text-align: center;
+}
+.term-fail .ic {
+  width: 26px; height: 26px;
+  color: var(--text-3);
+}
+.term-fail .ic.warn { color: var(--amber); }
+.term-fail .ttl {
+  font-family: var(--font-ui);
+  font-size: 12.5px; font-weight: 600;
+  color: var(--text-2);
+  letter-spacing: -0.005em;
+}
+.term-fail .msg {
+  font-family: var(--font-ui);
+  font-size: 11.5px; line-height: 1.5;
+  color: var(--text-3);
+  max-width: 280px;
+}
+.term-fail .hint {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-3);
+  background: rgba(11,17,32,0.6);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: 5px 8px;
+  margin-top: 2px;
+}
+.term-fail .act {
+  margin-top: 4px;
+}
+
 /* ===== ACTIVITY LOG ===== */
 .alog {
   display: flex; flex-direction: column;

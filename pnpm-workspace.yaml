@@ -3,3 +3,6 @@ packages:
 allowBuilds:
   '@clerk/shared': false
   esbuild: false
+  # node-pty has a native postinstall prebuild step (packages/companion).
+  # macOS ships a prebuilt darwin-arm64/-x64 binary so this is install-clean.
+  node-pty: true
