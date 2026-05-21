@@ -233,6 +233,119 @@ describe("BridgeSession — idle timeout reaps a silent session", () => {
   });
 });
 
+// ── claude spawn failure degrades, does NOT crash the Companion (P1-1) ───────
+//
+// ADR-001 "never hard-fail": pointing `claudeBin` at a binary that does not
+// exist must NOT crash the Companion. `node-pty` has two failure shapes:
+//   - it can throw SYNCHRONOUSLY (a native-module load error / posix_spawnp
+//     failure) — the bridge catches that so it never escapes the upgrade
+//     handler;
+//   - on macOS it does NOT throw for a missing binary — it returns an IPty and
+//     fires a near-immediate failure `onExit`. The bridge classifies that as a
+//     spawn failure too.
+// Either way: the Companion process survives, a typed `error` frame is sent,
+// and the socket closes.
+
+describe("BridgeSession — claude spawn failure degrades (P1-1)", () => {
+  /** A fake ws that records every frame sent and whether close() was called. */
+  function makeFakeWs() {
+    const sent: string[] = [];
+    const state = { closed: false };
+    const ws = {
+      readyState: 1,
+      on() {
+        return this;
+      },
+      send: (data: string) => sent.push(data),
+      ping: vi.fn(),
+      close: () => {
+        state.closed = true;
+      },
+    };
+    return { ws, sent, state };
+  }
+
+  it("a nonexistent claudeBin → no crash, typed error frame, socket closed", async () => {
+    const { ws, sent, state } = makeFakeWs();
+
+    // Constructing the bridge with a binary that does not exist must NOT throw
+    // out of the constructor (an uncaught throw is the crash being prevented).
+    let bridge: BridgeSession | undefined;
+    expect(() => {
+      bridge = new BridgeSession(ws as never, {
+        pty: {
+          claudeBin: "/nonexistent/definitely-not-a-real-binary-xyz",
+          claudeArgs: [],
+          cwd: process.cwd(),
+          env: process.env,
+        },
+        context: TEST_CTX,
+        idleTimeoutMs: 100_000,
+        heartbeatIntervalMs: 100_000,
+      });
+    }).not.toThrow();
+
+    // The failure may surface synchronously (caught spawn throw) or via a
+    // near-immediate failure `onExit`. Either way the bridge tears down and a
+    // typed `error` frame lands — wait for the teardown.
+    await waitFor(() => bridge?.isTornDown === true, 4000);
+    expect(bridge?.isTornDown).toBe(true);
+
+    // A typed `error` frame was sent carrying a shipped failure-state code
+    // (protocol.ts). No bare `exit`-only outcome — the panel must be able to
+    // reach `claude-unusable` / `local-permission-denied`.
+    const frames = sent.map((s) => JSON.parse(s) as { t: string; code?: string });
+    const errorFrame = frames.find((f) => f.t === "error");
+    expect(errorFrame).toBeDefined();
+    expect(["claude-unusable", "local-permission-denied"]).toContain(
+      errorFrame?.code
+    );
+
+    // The socket was closed cleanly.
+    expect(state.closed).toBe(true);
+  });
+
+  it("the Companion stays alive — a second session spawns fine after a failure", async () => {
+    // A spawn failure must not poison the process: the very next connection
+    // (a good binary) gets a healthy session.
+    const fail = makeFakeWs();
+    const failed = new BridgeSession(fail.ws as never, {
+      pty: {
+        claudeBin: "/nonexistent/definitely-not-a-real-binary-xyz",
+        claudeArgs: [],
+        cwd: process.cwd(),
+        env: process.env,
+      },
+      context: TEST_CTX,
+      idleTimeoutMs: 100_000,
+      heartbeatIntervalMs: 100_000,
+    });
+    await waitFor(() => failed.isTornDown === true, 4000);
+    expect(failed.isTornDown).toBe(true);
+
+    // Next connection — a real (stand-in) binary. It spawns normally; the
+    // earlier failure did not crash or poison the Companion.
+    const ok = makeFakeWs();
+    const okBridge = new BridgeSession(ok.ws as never, {
+      pty: {
+        claudeBin: "/bin/sh",
+        claudeArgs: ["-c", "sleep 30"],
+        cwd: process.cwd(),
+        env: process.env,
+      },
+      context: TEST_CTX,
+      idleTimeoutMs: 100_000,
+      heartbeatIntervalMs: 100_000,
+    });
+    expect(okBridge.session).toBeDefined();
+    expect(okBridge.session?.pid).toBeGreaterThan(0);
+    expect(okBridge.isTornDown).toBe(false);
+
+    okBridge.teardown("test-cleanup");
+    await waitFor(() => !isAlive(okBridge.session?.pid ?? -1));
+  });
+});
+
 // ── Companion SIGTERM — closeAll tears every live session down ───────────────
 
 describe("Companion shutdown — every session torn down", () => {

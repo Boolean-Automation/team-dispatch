@@ -274,6 +274,7 @@ export function TicketDetailPage() {
           ticket={ticket}
           assigneeName={assigneeName}
           activityItems={activityItems}
+          clientSlug={accountQuery.data?.slug}
         />
         <RToolbar mode={panel} setMode={setPanel} />
       </div>

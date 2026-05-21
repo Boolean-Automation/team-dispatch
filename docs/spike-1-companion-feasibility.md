@@ -64,9 +64,13 @@ browser tab.
   `resize` frame is honored (prototype proved `tput cols → 132`; the
   bridge-integration capture sent `resize{132,40}` accepted with no error frame).
 - **Stability** — sustained multi-turn sessions ran without WS drop or garble.
-  A4's full ≥10-minute soak was not run as a discrete timed capture; multi-turn
-  interactive sessions held cleanly across the capture window. Long-session
-  soak is carried as a Phase 2 pre-pilot check (residual R4).
+  A4's ≥10-minute soak WAS run as a discrete timed capture: a **12 min 31 sec**
+  continuous browser-driven `claude` session, three turns (start / middle /
+  end), with **no WS drop** (one session id `4a04` start-to-end, one Companion
+  accept line, zero teardown), **no output garble** (clean scrollback, no
+  control chars / no `�`), and **no PTY leak** (exactly one `claude` process
+  across all 22 process-tree samples). Evidence:
+  `evidence/A4-sustained-session.md`. A4 is captured — PASS.
 
 `xterm.js` (scoped `@xterm/xterm@6`) + `@xterm/addon-fit` is the emulator;
 `node-pty@1.2.0-beta.13` is the PTY. **Cross-version (Q1's "Sonoma + Ventura")
@@ -188,8 +192,13 @@ the SE asks "what is the dispatch ticket ID and its status?" and `claude`
 answers *"Ticket ID: DSP-2901, Status: on-you. Both come straight from the
 ticket context I was handed."* The headless capture (`claude-behavior.txt`)
 injected the FULL payload (client slug + title + status) and `claude` answered
-all three. `claude --append-system-prompt-file` is noted as the Phase 2
-hardening path (a tmpfile injection that survives a `/clear`).
+all three. The browser path now matches that headless payload:
+`TicketDetailPage` already fetches the Account (`useAccount`), so `RightPanel`
+→ `PanelTerminal` threads `account.slug` (client slug) and `ticket.preview` (the
+ticket's human-readable label — the dispatch `Ticket` shape carries no separate
+title field) alongside status into the `CompanionWsTransport` query params.
+`claude --append-system-prompt-file` is noted as the Phase 2 hardening path (a
+tmpfile injection that survives a `/clear`).
 
 ### Q7 — Companion install + auto-update mechanism?
 
@@ -242,18 +251,23 @@ subscription" purely from process exit code — it must either parse the
 onboarding/login output or probe a known credential path. State (c) detection is
 a Phase 2 design item, recorded here, not a spike defect.
 
-**A5b — the production HTTPS-origin path.** `evidence/integration-session-https.md`
-+ `09-A5b-integration-session-https.png`: the **built** web app served over
-local HTTPS with a self-signed cert (`packages/web/scripts/serve-https.mjs`,
-`https://localhost:8443`) reached `http://127.0.0.1:7720/healthz` (200) and
-`ws://127.0.0.1:7720` — the WebSocket connected, the live `claude` session
-rendered. **On Chrome 148, no Local Network Access permission prompt appeared.**
-Caveat: the spike's HTTPS origin is itself a `localhost` host; Chrome treats
-`localhost`→`localhost` as the most permissive LNA case, whereas the deployed
-`https://dispatch.paintos.app` is a **public** origin reaching `127.0.0.1` — a
-public→local request, the case Chrome 147+ actually gates. The spike proves the
-HTTPS-page → localhost-WS path mechanically composes; it does NOT fully
-reproduce the public-origin LNA prompt. **Recommended Phase 2 transport path:**
+**A5b — the HTTPS-origin path (`localhost`-origin only — the real public-origin
+path is a Phase 2 prerequisite, NOT proven here).**
+`evidence/integration-session-https.md` + `09-A5b-integration-session-https.png`:
+the **built** web app served over local HTTPS with a self-signed cert
+(`packages/web/scripts/serve-https.mjs`, `https://localhost:8443`) reached
+`http://127.0.0.1:7720/healthz` (200) and `ws://127.0.0.1:7720` — the WebSocket
+connected, the live `claude` session rendered. **On Chrome 148, no Local
+Network Access permission prompt appeared.** This is NOT "the production HTTPS
+path is implemented": the spike's HTTPS origin is itself a `localhost` host, and
+Chrome treats `localhost`→`localhost` as the most permissive LNA case. The
+deployed `https://dispatch.paintos.app` is a **public** origin reaching
+`127.0.0.1` — a public→local request, the exact case Chrome 147+ Local Network
+Access actually gates, and the case the spike did NOT exercise. The spike proves
+only that the HTTPS-page → localhost-WS path mechanically composes; it does NOT
+reproduce the production public-origin LNA prompt. **Exercising the real
+`https://dispatch.paintos.app` → localhost path on Chrome 147+ is a named
+Phase 2 prerequisite (residual R1) — it must be done before the Phase 2 pilot.** **Recommended Phase 2 transport path:**
 ship on `ws://127.0.0.1` and expect the Chrome LNA permission prompt (handle it
 in the panel's connect UX as a first-connect step); evaluate `wss://localhost`
 with a locally-trusted cert as a fallback if the LNA prompt proves too rough;
@@ -381,10 +395,17 @@ older macOS line before the pilot ships. Ranked as residual R5.
   Residual: a squatter cannot be *positively* distinguished from an absent
   Companion — both read as "offline." Acceptable for the 2-machine pilot;
   Phase 2 owner should consider a signed `session-meta` for positive identity.
-- **R4 — long-session soak (A4).** Multi-turn interactive sessions held cleanly
-  through the capture window; a discrete ≥10-minute timed soak with a
-  WS-idle-timeout probe was not run as its own capture. Run it as a Phase 2
-  pre-pilot check.
+- **R4 — idle-timeout scope (A4).** The A4 soak is captured — a 12m31s
+  continuous session held cleanly (`evidence/A4-sustained-session.md`), so the
+  soak itself is no longer an open risk. The residual is a **conscious Phase 2
+  decision**, not a defect: the Companion's 90s `IDLE_TIMEOUT_MS` reaps only a
+  *half-open / laptop-sleep* socket (one whose pongs have stopped) — the
+  heartbeat/pong keep-alive carried the soak through a 6-minute no-input gap, so
+  it is correctly NOT a cap on long work sessions. If an SE closes the laptop
+  lid mid-ticket, the pong stops and the session is reaped after 90s (the
+  intended orphan-prevention behavior); on wake the SE gets a fresh session, not
+  the old one. Phase 2 should decide whether a sleep-then-wake SE should be able
+  to *resume* rather than respawn. Not a spike defect.
 - **R5 — single-OS evidence base (OQ-S7).** Only macOS 26.3 tested. Sonoma /
   Ventura is an open Phase 2 pre-requisite. See §"macOS-version honesty".
 - **R6 — fixed-port discovery fingerprinting.** A fixed port + `/healthz` makes
@@ -417,9 +438,12 @@ package's tests re-run green (spec §6 permits Slice-4 remediation):
    to the api, so the production-like HTTPS origin can mint a Companion token
    (the static SPA server would otherwise 404 the same-origin `POST`).
 4. **`packages/web` transport chain** (`companion-ws-transport.ts`,
-   `use-companion-session.ts`, `PanelTerminal.tsx`) — threaded Ticket metadata
-   (status) into the context-injection preamble so the browser path injects
-   real ticket state, not `unknown`.
+   `use-companion-session.ts`, `PanelTerminal.tsx`, `RightPanel.tsx`,
+   `TicketDetailPage.tsx`) — threaded the full Ticket + Account metadata
+   (client slug from the already-fetched Account, the ticket preview as the
+   human-readable title, and status) into the context-injection preamble so
+   the browser path injects the same real payload the headless capture proved,
+   not `unknown`.
 
 Gates after remediation: `pnpm -r typecheck` clean; `pnpm -r lint` clean;
 `pnpm -r test` — **356 tests passing** (companion 51, api 82, core 200, mcp 13,
@@ -434,9 +458,9 @@ web 10).
 | A1 — `claude` session in browser xterm | ✅ proven | `03`, `05`, integration-session.md |
 | A2 — render fidelity + resize | ✅ proven | `03`, `07a`/`07b` |
 | A3 — input fidelity (keystrokes, paste, Ctrl-C) | ✅ proven | `04`, `claude-behavior.txt` |
-| A4 — long-session stability | ⚠️ partial | multi-turn proven; ≥10-min soak → R4 |
+| A4 — long-session stability | ✅ proven | `A4-sustained-session.md` — 12m31s soak, 3 turns, no WS drop / no garble / no PTY leak |
 | A5 — cross-version (Sonoma/Ventura) | ⚠️ not proven | single-OS — R5 / §macOS honesty |
-| A5b — production HTTPS origin + LNA | ✅ proven (scoped) | `09`, integration-session-https.md — R1 caveat |
+| A5b — production HTTPS origin + LNA | ⚠️ partial — `localhost`-origin only; real public-origin LNA is a Phase 2 prerequisite (R1) | `09`, integration-session-https.md |
 | A6 — spawn not attach | ✅ proven | `bridge-integration.txt` |
 | A7 — concurrency cost + quota | ✅ proven | `bridge-integration.txt`, `claude-behavior.txt` |
 | A7b — direct `claude` argv, no shell | ✅ proven | `bridge-integration.txt` |

@@ -139,10 +139,15 @@ export function buildCompanionServer(config = loadConfig()) {
       });
       liveSessions.add(bridge);
       ws.on("close", () => liveSessions.delete(bridge));
-      console.error(
-        `[companion] session ${bridge.session.sessionId} accepted ` +
-          `(ticket ${auth.connection.claims.ticketId})`
-      );
+      // `bridge.session` is undefined when the `claude` spawn failed — the
+      // bridge already sent a typed `error` frame and closed the socket; the
+      // Companion stays alive (ADR-001 "never hard-fail").
+      if (bridge.session) {
+        console.error(
+          `[companion] session ${bridge.session.sessionId} accepted ` +
+            `(ticket ${auth.connection.claims.ticketId})`
+        );
+      }
     });
   });
 

@@ -21,6 +21,13 @@ interface RightPanelProps {
   ticket: Ticket;
   assigneeName?: string;
   activityItems?: ActivityItem[];
+  /**
+   * The Account slug for the ticket's client, when `TicketDetailPage` has the
+   * Account loaded. Threaded into the Companion context-injection payload so
+   * the browser path injects the client slug, matching what the headless
+   * capture proved (Codex P2).
+   */
+  clientSlug?: string;
 }
 
 export function RightPanel({
@@ -28,6 +35,7 @@ export function RightPanel({
   ticket,
   assigneeName,
   activityItems = [],
+  clientSlug,
 }: RightPanelProps) {
   let title = "Ticket & client";
   if (mode === "activity") title = "Activity";
@@ -64,7 +72,9 @@ export function RightPanel({
         {mode === "activity" && (
           <PanelActivity items={activityItems} />
         )}
-        {mode === "terminal" && <PanelTerminal ticket={ticket} />}
+        {mode === "terminal" && (
+          <PanelTerminal ticket={ticket} clientSlug={clientSlug} />
+        )}
       </div>
     </aside>
   );

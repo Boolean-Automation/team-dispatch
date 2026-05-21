@@ -131,6 +131,62 @@ describe("CompanionWsTransport — clean degradation (A14 / A12c)", () => {
     expect(state).toBe("mint-unavailable");
     transport.close();
   });
+
+  // ── Handshake-timeout guard (P1-2) ─────────────────────────────────────────
+  //
+  // A process can accept the WebSocket and then send NOTHING — a fake/stale
+  // Companion or a port-squatter. Without a handshake timer the panel sits in
+  // `connecting` forever (violates A12c/A14 "does not hang"). The transport
+  // must reap a silent socket and surface a failure state within the timeout.
+
+  it("resolves to `not-detected` when the socket accepts but stays silent (P1-2)", async () => {
+    // A stub socket: it "opens" (addEventListener wires the listeners) but the
+    // server never sends a `session-meta` — no message events are ever fired.
+    let socketClosed = false;
+    const silentSocket = {
+      readyState: 1, // OPEN
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      close: () => {
+        socketClosed = true;
+      },
+      send: () => {},
+    };
+
+    const transport = new CompanionWsTransport({
+      ticketId: "DSP-2901",
+      origin: "http://localhost:5173",
+      mintToken: async () => ({
+        token: "fixture.token.value",
+        sessionId: "sess-fixture",
+        port: 7720,
+      }),
+      healthProbe: async () => true,
+      socketFactory: () => silentSocket as unknown as WebSocket,
+      // Tiny window so the test does not wait the production 5s.
+      handshakeTimeoutMs: 150,
+    });
+
+    const start = Date.now();
+    const state = await new Promise<string>((resolve) => {
+      transport.connect({
+        onFrame: () => {},
+        onStatus: (s) => {
+          // `connecting` is the pre-handshake state — wait for the real verdict.
+          if (s.state !== "connecting") resolve(s.state);
+        },
+      });
+    });
+    const elapsed = Date.now() - start;
+
+    // It did NOT hang — it surfaced a failure state within the timeout window
+    // (plus a generous margin for the mint/health async hops).
+    expect(state).toBe("not-detected");
+    expect(elapsed).toBeLessThan(2000);
+    // The silent socket was closed by the timeout guard.
+    expect(socketClosed).toBe(true);
+    transport.close();
+  });
 });
 
 // ── 5. PanelTerminal accepts the stub transport UNMODIFIED (A14b) ────────────

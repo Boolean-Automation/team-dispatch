@@ -29,6 +29,16 @@ import { apiClient } from "../lib/api-client.js";
 /** Default fixed loopback port the Companion listens on (OQ-S4). */
 const DEFAULT_COMPANION_PORT = 7720;
 
+/**
+ * How long the transport waits for a valid `session-meta` handshake frame
+ * after the socket opens before giving up. A process that accepts the
+ * WebSocket and then sends nothing — a fake/stale Companion or a port-squatter
+ * — must not leave the panel in `connecting` forever (A12c/A14 "does not
+ * hang"). 5s is generous for a loopback handshake yet short enough that the
+ * panel surfaces a clean failure state quickly.
+ */
+const HANDSHAKE_TIMEOUT_MS = 5_000;
+
 /** How a connection token is obtained — injected so tests need no live api. */
 export interface CompanionTokenResponse {
   token: string;
@@ -72,6 +82,12 @@ export interface CompanionWsTransportOptions {
   healthProbe?: HealthProbeFn;
   /** Socket factory. Defaults to `new WebSocket(url)`. */
   socketFactory?: SocketFactory;
+  /**
+   * Override the handshake timeout — a test hook so a unit test can exercise
+   * the fake/stale-Companion guard without a multi-second real wait. Defaults
+   * to `HANDSHAKE_TIMEOUT_MS`.
+   */
+  handshakeTimeoutMs?: number;
 }
 
 /** Default token mint — POST /api/companion/sessions via the api-client. */
@@ -109,12 +125,19 @@ export class CompanionWsTransport implements TerminalTransport {
     mintToken: MintTokenFn;
     healthProbe: HealthProbeFn;
     socketFactory: SocketFactory;
+    handshakeTimeoutMs: number;
   };
 
   private ws: WebSocket | undefined;
   private handlers: TransportHandlers | undefined;
   private closed = false;
   private handshakeComplete = false;
+  /**
+   * Fires if no valid `session-meta` arrives within HANDSHAKE_TIMEOUT_MS — the
+   * fake/stale-Companion-hangs-the-panel guard (A12c/A14). Cleared the moment
+   * the handshake completes or the transport is closed.
+   */
+  private handshakeTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(options: CompanionWsTransportOptions) {
     this.opts = {
@@ -124,6 +147,7 @@ export class CompanionWsTransport implements TerminalTransport {
       mintToken: options.mintToken ?? defaultMintToken,
       healthProbe: options.healthProbe ?? defaultHealthProbe,
       socketFactory: options.socketFactory ?? ((url) => new WebSocket(url)),
+      handshakeTimeoutMs: options.handshakeTimeoutMs ?? HANDSHAKE_TIMEOUT_MS,
     };
   }
 
@@ -144,6 +168,7 @@ export class CompanionWsTransport implements TerminalTransport {
 
   close(): void {
     this.closed = true;
+    this.clearHandshakeTimer();
     if (this.ws) {
       try {
         this.ws.close();
@@ -151,6 +176,13 @@ export class CompanionWsTransport implements TerminalTransport {
         /* already closed */
       }
       this.ws = undefined;
+    }
+  }
+
+  private clearHandshakeTimer(): void {
+    if (this.handshakeTimer !== undefined) {
+      clearTimeout(this.handshakeTimer);
+      this.handshakeTimer = undefined;
     }
   }
 
@@ -203,6 +235,22 @@ export class CompanionWsTransport implements TerminalTransport {
     }
     this.ws = ws;
 
+    // Handshake-timeout guard (A12c/A14). A process can accept the WebSocket
+    // and then send nothing — a fake/stale Companion or a port-squatter. With
+    // no timer the panel sits in `connecting` forever. Arm a short timer the
+    // moment the socket is constructed; if no valid `session-meta` arrives, the
+    // socket is closed and the panel surfaces `not-detected`. The timer is
+    // cleared once the handshake completes (below) or `close()` runs.
+    this.handshakeTimer = setTimeout(() => {
+      this.handshakeTimer = undefined;
+      if (this.closed || this.handshakeComplete) return;
+      this.setState(
+        "not-detected",
+        "Companion did not complete the handshake in time."
+      );
+      this.close();
+    }, this.opts.handshakeTimeoutMs);
+
     ws.addEventListener("message", (ev: MessageEvent) => {
       const frame = parseServerFrame(
         typeof ev.data === "string" ? ev.data : String(ev.data)
@@ -213,6 +261,23 @@ export class CompanionWsTransport implements TerminalTransport {
       // protocolVersion this web app speaks. A socket that cannot complete
       // this is a fake Companion / port-squatter: treat it as offline (A12c).
       if (!this.handshakeComplete) {
+        // A real Companion that could not spawn `claude` sends a typed `error`
+        // frame BEFORE any session-meta (the spawn fails before the handshake
+        // — bridge.ts ADR-001 "never hard-fail" path). Route its code into the
+        // matching failure state so the panel shows the right guidance, not a
+        // generic "Companion offline".
+        if (frame.t === "error") {
+          if (
+            frame.code === "claude-unusable" ||
+            frame.code === "local-permission-denied"
+          ) {
+            this.setState(frame.code, frame.msg);
+          } else {
+            this.setState("not-detected", `Companion error: ${frame.code}.`);
+          }
+          this.close();
+          return;
+        }
         if (frame.t !== "session-meta") {
           this.setState("not-detected", "Companion handshake malformed.");
           this.close();
@@ -226,8 +291,28 @@ export class CompanionWsTransport implements TerminalTransport {
           this.close();
           return;
         }
+        // A valid session-meta arrived — the handshake is done; disarm the
+        // timeout guard so it cannot reap a healthy connection.
         this.handshakeComplete = true;
+        this.clearHandshakeTimer();
         this.handlers?.onStatus({ state: "connected", sessionId: frame.sessionId });
+      }
+
+      // A post-handshake `error` frame carrying a connection-failure code
+      // means the Companion accepted the socket and sent `session-meta`, then
+      // `claude` died at once (a missing binary fails AFTER spawn on macOS —
+      // bridge.ts `handlePtyExit`). Route the code into the matching failure
+      // state so the panel reaches `claude-unusable` instead of sitting on a
+      // stale `connected`.
+      if (
+        frame.t === "error" &&
+        (frame.code === "claude-unusable" ||
+          frame.code === "local-permission-denied")
+      ) {
+        this.setState(frame.code, frame.msg);
+        this.handlers?.onFrame(frame);
+        this.close();
+        return;
       }
 
       this.handlers?.onFrame(frame);

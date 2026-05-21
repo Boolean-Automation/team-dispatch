@@ -20,6 +20,12 @@ import { useCompanion } from "./use-companion-session.js";
 interface PanelTerminalProps {
   ticket: Ticket;
   /**
+   * The Account slug for the ticket's client, when the parent has the Account
+   * loaded. Threaded into the Companion context-injection payload (A15 /
+   * OQ-S2) so the browser path injects the client slug.
+   */
+  clientSlug?: string;
+  /**
    * Optional transport override. The spike substitutes the
    * `FallbackTransportStub` here to prove the seam — the component accepts it
    * UNMODIFIED. Production omits this and the real WS transport is used.
@@ -60,13 +66,24 @@ const LIVE_STATES: ReadonlySet<ConnectionState> = new Set<ConnectionState>([
   "connected",
 ]);
 
-export function PanelTerminal({ ticket, transport }: PanelTerminalProps) {
-  // Pass the Ticket status into the context-injection preamble (A15). The
-  // client slug needs the Account object — `RightPanel` does not thread it
-  // today; that is a Phase 2 polish item recorded in the verdict doc.
+export function PanelTerminal({
+  ticket,
+  clientSlug,
+  transport,
+}: PanelTerminalProps) {
+  // Thread the Ticket + Account context into the context-injection preamble
+  // (A15 / OQ-S2): status from the Ticket, the client slug from the Account
+  // (when the parent has it loaded), and the message preview as the ticket
+  // title — the dispatch `Ticket` shape carries no separate title field, so
+  // `preview` is the closest honest human-readable label. This matches the
+  // payload the headless capture proved (Codex P2).
   const companion = useCompanion({
     ticketId: ticket.displayId,
-    meta: { status: ticket.status },
+    meta: {
+      status: ticket.status,
+      clientSlug,
+      title: ticket.preview,
+    },
     transport,
   });
   const { status } = companion;
