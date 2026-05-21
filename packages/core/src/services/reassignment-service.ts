@@ -79,65 +79,91 @@ export async function initiateReassignment(
   const ticket = ticketRows[0]!;
   const isAdmin = proposerRole === "admin";
 
-  const undoToken = generateUndoToken();
+  // P2-4: guard against multiple concurrent pending reassignments per ticket.
+  // Wrap the check + insert in a transaction so the guard is race-safe against
+  // concurrent initiateReassignment calls for the same ticket.
+  // An accepted or rejected row does NOT block a new pending one — only an
+  // active 'pending' row blocks.
+  return await db.transaction(async (txn) => {
+    const existingPending = await txn
+      .select({ id: reassignments.id })
+      .from(reassignments)
+      .where(
+        and(
+          eq(reassignments.ticketId, ticketId),
+          eq(reassignments.status, "pending")
+        )
+      )
+      .limit(1);
 
-  // Write the reassignment row
-  const insertedRows = await db
-    .insert(reassignments)
-    .values({
-      ticketId,
-      proposer: proposerId,
-      recipient: recipientId,
-      status: isAdmin ? "accepted" : "pending",
-      resolvedAt: isAdmin ? new Date() : undefined,
-    })
-    .returning();
+    if (existingPending.length > 0) {
+      return {
+        ok: false,
+        error: "A pending reassignment already exists for this ticket",
+        _conflict: true, // signal to the API layer to return 409
+      } as InitiateReassignmentResult & { _conflict?: boolean };
+    }
 
-  const row = insertedRows[0]!;
+    const undoToken = generateUndoToken();
 
-  // Admin path: move assignee immediately
-  if (isAdmin) {
-    await db
-      .update(tickets)
-      .set({ assignee: recipientId, updatedAt: new Date() })
-      .where(eq(tickets.id, ticketId));
+    // Write the reassignment row
+    const insertedRows = await txn
+      .insert(reassignments)
+      .values({
+        ticketId,
+        proposer: proposerId,
+        recipient: recipientId,
+        status: isAdmin ? "accepted" : "pending",
+        resolvedAt: isAdmin ? new Date() : undefined,
+      })
+      .returning();
 
-    await appendAudit(db, {
-      ticketId,
-      actorId: proposerId,
-      event: "reassignment.created",
-      before: { assignee: ticket.assignee },
-      after: { assignee: recipientId, reassignmentId: row.id, adminImmediate: true },
-      undoToken,
-    });
+    const row = insertedRows[0]!;
 
-    // Notify recipient of incoming assignment
-    await createNotification(db, {
-      recipientId,
-      kind: "reassignment-accepted",
-      ticketId,
-      payload: { reassignmentId: row.id, proposer: proposerId },
-    });
-  } else {
-    // SE path: pending — notify recipient of incoming request
-    await appendAudit(db, {
-      ticketId,
-      actorId: proposerId,
-      event: "reassignment.created",
-      before: { assignee: ticket.assignee },
-      after: { reassignmentId: row.id, recipient: recipientId, pending: true },
-      undoToken,
-    });
+    // Admin path: move assignee immediately
+    if (isAdmin) {
+      await txn
+        .update(tickets)
+        .set({ assignee: recipientId, updatedAt: new Date() })
+        .where(eq(tickets.id, ticketId));
 
-    await createNotification(db, {
-      recipientId,
-      kind: "reassignment-incoming",
-      ticketId,
-      payload: { reassignmentId: row.id, proposer: proposerId },
-    });
-  }
+      await appendAudit(txn, {
+        ticketId,
+        actorId: proposerId,
+        event: "reassignment.created",
+        before: { assignee: ticket.assignee },
+        after: { assignee: recipientId, reassignmentId: row.id, adminImmediate: true },
+        undoToken,
+      });
 
-  return { ok: true, reassignment: toDto(row), undoToken };
+      // Notify recipient of incoming assignment
+      await createNotification(txn, {
+        recipientId,
+        kind: "reassignment-accepted",
+        ticketId,
+        payload: { reassignmentId: row.id, proposer: proposerId },
+      });
+    } else {
+      // SE path: pending — notify recipient of incoming request
+      await appendAudit(txn, {
+        ticketId,
+        actorId: proposerId,
+        event: "reassignment.created",
+        before: { assignee: ticket.assignee },
+        after: { reassignmentId: row.id, recipient: recipientId, pending: true },
+        undoToken,
+      });
+
+      await createNotification(txn, {
+        recipientId,
+        kind: "reassignment-incoming",
+        ticketId,
+        payload: { reassignmentId: row.id, proposer: proposerId },
+      });
+    }
+
+    return { ok: true, reassignment: toDto(row), undoToken };
+  });
 }
 
 export interface ResolveReassignmentResult {

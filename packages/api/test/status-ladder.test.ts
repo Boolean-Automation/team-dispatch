@@ -314,12 +314,13 @@ describe("SLA timer advance 1: waiting-client → follow-up-required (A18)", () 
   it("runSlaAdvances advances a waiting-client ticket past 2 business days", async () => {
     await setTicketStatus("waiting-client");
 
-    // Backdate updatedAt to simulate 2+ business days ago.
-    // We pick Mon Jan 1 2024 6am PT (in PST = 14:00 UTC) as a known past date.
+    // P2-3: stamp waiting_client_since_at to simulate the ticket entering
+    // waiting-client 2+ business days ago. The timer now reads this field
+    // instead of updatedAt (effort-bucket changes no longer reset the clock).
     const backdatedAt = new Date("2024-01-01T14:00:00Z");
     await db
       .update(tickets)
-      .set({ updatedAt: backdatedAt })
+      .set({ updatedAt: backdatedAt, waitingClientSinceAt: backdatedAt })
       .where(eq(tickets.id, testTicketId));
 
     // Run the SLA timer during "business hours" — we pass a known business-hours

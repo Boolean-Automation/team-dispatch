@@ -2,16 +2,19 @@
 //
 // Tests: reverse ticket.created, ticket.dismissed, ticket.status_changed.
 // Verifies: not-found token, already-undone token.
+// P1-1: message.created undo — TOCTOU race: (a) undo before worker claims →
+//        cancel + delete + revert; (b) worker claims first → undo bails without delete.
 //
 // plan §Slice 4 / spec §3.9 / A25
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { createDb } from "../../db/src/client.js";
-import { accounts, tickets, messages, auditLog, notifications } from "../../db/src/schema.js";
+import { accounts, tickets, messages, auditLog, notifications, slackOutbox } from "../../db/src/schema.js";
 import { eq } from "drizzle-orm";
 import type { Db } from "../../db/src/client.js";
 import { undoByToken, generateUndoToken } from "../src/services/undo-service.js";
 import { appendAudit } from "../src/services/audit-service.js";
+import { insertOutboxRow, claimOutboxRow } from "../src/services/outbox-service.js";
 
 const DATABASE_URL =
   process.env.TEST_DATABASE_URL ??
@@ -185,5 +188,144 @@ describe("undoByToken — error cases", () => {
     const result2 = await undoByToken(db, token);
     expect(result2.ok).toBe(false);
     if (!result2.ok) expect(result2.reason).toBe("already-undone");
+  });
+});
+
+// ── P1-1: message.created undo — TOCTOU race branches ────────────────────────
+//
+// Branch (a): undo before the outbox worker claims the row
+//   → cancel succeeds → message is deleted → ticket status reverts
+//
+// Branch (b): worker already claimed the row (pending → sent)
+//   → cancel UPDATE matches nothing → undo bails with 'undo-too-late'
+//   → message record is NOT deleted (data integrity)
+//   → ticket status is NOT reverted
+
+async function seedTicketWithMessage(db: Db, accountId: string) {
+  const ticket = await seedTicket(db, accountId, "on-you");
+
+  // Insert a message row
+  const msgRows = await db
+    .insert(messages)
+    .values({
+      ticketId: ticket.id,
+      direction: "outbound",
+      authorKind: "se",
+      authorRef: "user_se_test",
+      body: "Undo TOCTOU test reply",
+    })
+    .returning();
+  const msg = msgRows[0]!;
+
+  // Insert a pending outbox row
+  const outboxRow = await insertOutboxRow(db, {
+    ticketId: ticket.id,
+    messageId: msg.id,
+    idempotencyKey: `test:toctou:${msg.id}`,
+    channelId: "C_TOCTOU_TEST",
+    payload: { text: "Undo TOCTOU test" },
+    scheduledAt: new Date(Date.now() + 30_000), // in window — not yet due
+  });
+
+  return { ticket, msg, outboxRow };
+}
+
+describe("undoByToken — message.created TOCTOU race (P1-1)", () => {
+  it("(a) undo before worker claims: cancels row, deletes message, reverts status", async () => {
+    const { ticket, msg, outboxRow } = await seedTicketWithMessage(db, testAccountId);
+
+    // Advance ticket to waiting-client (simulates reply resolving it)
+    await db
+      .update(tickets)
+      .set({ status: "waiting-client" })
+      .where(eq(tickets.id, ticket.id));
+
+    const token = generateUndoToken();
+    await appendAudit(db, {
+      ticketId: ticket.id,
+      event: "message.created",
+      before: { status: "on-you" },
+      after: {
+        messageId: msg.id,
+        resolvedTicket: true,
+      },
+      undoToken: token,
+    });
+
+    // Undo before worker claims — outbox row is still 'pending'
+    const result = await undoByToken(db, token);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.action).toBe("message.created");
+
+    // Message should be deleted
+    const msgRows = await db
+      .select()
+      .from(messages)
+      .where(eq(messages.id, msg.id))
+      .limit(1);
+    expect(msgRows.length).toBe(0);
+
+    // Outbox row cascades when message is deleted (FK messages(id) ON DELETE CASCADE)
+    // so the row should no longer exist either
+    const outboxRows = await db
+      .select({ status: slackOutbox.status })
+      .from(slackOutbox)
+      .where(eq(slackOutbox.id, outboxRow.id))
+      .limit(1);
+    expect(outboxRows.length).toBe(0);
+
+    // Ticket status should revert to 'on-you'
+    const ticketRows = await db
+      .select({ status: tickets.status })
+      .from(tickets)
+      .where(eq(tickets.id, ticket.id))
+      .limit(1);
+    expect(ticketRows[0]?.status).toBe("on-you");
+
+    // Outbox row already gone via cascade; no cleanup needed
+  });
+
+  it("(b) worker claims first: undo bails with undo-too-late, message NOT deleted", async () => {
+    const { ticket, msg, outboxRow } = await seedTicketWithMessage(db, testAccountId);
+
+    const token = generateUndoToken();
+    await appendAudit(db, {
+      ticketId: ticket.id,
+      event: "message.created",
+      before: { status: "on-you" },
+      after: {
+        messageId: msg.id,
+        resolvedTicket: false,
+      },
+      undoToken: token,
+    });
+
+    // Simulate the outbox worker claiming the row (pending → sent)
+    await claimOutboxRow(db, outboxRow.id);
+
+    // Undo after worker claims — outbox row is now 'sent', not 'pending'
+    const result = await undoByToken(db, token);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toBe("undo-too-late");
+
+    // Message must NOT be deleted (data integrity — Slack already received it)
+    const msgRows = await db
+      .select()
+      .from(messages)
+      .where(eq(messages.id, msg.id))
+      .limit(1);
+    expect(msgRows.length).toBe(1);
+
+    // Ticket status must be unchanged (still 'on-you')
+    const ticketRows = await db
+      .select({ status: tickets.status })
+      .from(tickets)
+      .where(eq(tickets.id, ticket.id))
+      .limit(1);
+    expect(ticketRows[0]?.status).toBe("on-you");
+
+    // Cleanup
+    await db.delete(slackOutbox).where(eq(slackOutbox.id, outboxRow.id));
+    await db.delete(messages).where(eq(messages.id, msg.id));
   });
 });

@@ -59,6 +59,10 @@ export const TicketSchema = z.object({
   resolvedAt: z.string().datetime().nullable().optional(),
   slaDeadline: z.string().datetime().nullable().optional(),
   slaPaused: z.boolean(),
+  // Stamped when ticket enters 'waiting-client'; cleared on exit. Used by SLA
+  // timer to measure the silence window without being reset by unrelated
+  // ticket mutations. Added in migration 0005. (P2-3)
+  waitingClientSinceAt: z.string().datetime().nullable().optional(),
   dismissedAt: z.string().datetime().nullable().optional(),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),

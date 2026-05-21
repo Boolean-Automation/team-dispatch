@@ -5,10 +5,13 @@
 //
 //   (1) waiting-client → follow-up-required
 //       Ticket in 'waiting-client' silent for 2 business days.
-//       "Silent" = no inbound message since the ticket entered waiting-client
-//       (tracked via tickets.updated_at as a proxy — the last client reply
-//        or outbound send is the last mutation; waiting-client is entered via
-//        resolveTicket=true on reply, so updated_at is set at that moment).
+//       "Silent since" = tickets.waiting_client_since_at — stamped ONLY when a
+//       ticket transitions INTO 'waiting-client' (via reply-service, ingest, or
+//       manual updateTicketStatus). Unrelated mutations (effort-bucket set,
+//       audit-only events) do NOT bump this field, so the follow-up clock is not
+//       silently reset. Rows where waiting_client_since_at IS NULL are skipped
+//       (they're not waiting on client or the column has not been stamped yet).
+//       (P2-3 — replaces the old updatedAt proxy)
 //
 //   (2) follow-up-1-sent → closeout
 //       Ticket in 'follow-up-1-sent' silent for 3 business days counted
@@ -22,7 +25,7 @@
 // plan §Slice 6 / spec §5.3 / A18 / ADR-006
 
 import cron from "node-cron";
-import { eq, and, isNull } from "drizzle-orm";
+import { eq, and, isNull, isNotNull } from "drizzle-orm";
 import type { Db } from "@dispatch/db";
 import { tickets } from "@dispatch/db";
 import {
@@ -49,27 +52,30 @@ export async function runSlaAdvances(db: Db, now: Date = new Date()): Promise<vo
 // ── Advance 1: waiting-client → follow-up-required (2 business days) ─────────
 
 async function advanceWaitingClient(db: Db, now: Date): Promise<void> {
-  // Fetch all non-dismissed tickets in 'waiting-client'
+  // Fetch all non-dismissed tickets in 'waiting-client' with a stamped
+  // waiting_client_since_at. Rows where this is NULL are skipped — they
+  // pre-date migration 0005 or were never properly stamped. (P2-3)
   const candidates = await db
     .select({
       id: tickets.id,
       assignee: tickets.assignee,
-      updatedAt: tickets.updatedAt,
+      waitingClientSinceAt: tickets.waitingClientSinceAt,
     })
     .from(tickets)
     .where(
       and(
         eq(tickets.status, "waiting-client"),
-        isNull(tickets.dismissedAt)
+        isNull(tickets.dismissedAt),
+        isNotNull(tickets.waitingClientSinceAt)
       )
     );
 
   for (const ticket of candidates) {
-    // "Silent since" = when the ticket last moved to waiting-client.
-    // We use updatedAt as a proxy because sendReply sets updatedAt when
-    // transitioning to waiting-client, and a client reply sets it again
-    // (which would have moved it out of waiting-client via A16).
-    const silentSince = ticket.updatedAt;
+    // "Silent since" = when the ticket entered 'waiting-client'.
+    // waiting_client_since_at is stamped exclusively on that transition so
+    // unrelated mutations (effort-bucket sets, audit appends) do not reset
+    // the follow-up clock. (P2-3)
+    const silentSince = ticket.waitingClientSinceAt!;
 
     if (!hasExceededBusinessDays(silentSince, 2, now)) continue;
 
@@ -77,7 +83,11 @@ async function advanceWaitingClient(db: Db, now: Date): Promise<void> {
     // actually moved the row (P2-G: guard against concurrent/manual transitions)
     const advanced = await db
       .update(tickets)
-      .set({ status: "follow-up-required", updatedAt: new Date() })
+      .set({
+        status: "follow-up-required",
+        updatedAt: new Date(),
+        waitingClientSinceAt: null, // leaving 'waiting-client' — clear the stamp (P2-3)
+      })
       .where(
         and(
           eq(tickets.id, ticket.id),

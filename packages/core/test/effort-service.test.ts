@@ -7,6 +7,8 @@
 //   4. updateTicketStatus rejects 'closed' with null effort bucket (service guard).
 //   5. updateTicketStatus succeeds after setting effort bucket.
 //   6. DB CHECK constraint prevents writing closed+null via a raw UPDATE.
+//   7. (P2-3) Setting effort_bucket on a waiting-client ticket does NOT change
+//      waiting_client_since_at (SLA timer clock must not be reset by unrelated mutations).
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { createDb } from "../../db/src/client.js";
@@ -157,5 +159,46 @@ describe("service-layer guard — effort bucket on close (A7)", () => {
     );
     expect(result.ok).toBe(true);
     expect(result.newStatus).toBe("closed");
+  });
+});
+
+// ── P2-3: effort_bucket set on waiting-client does NOT reset waiting_client_since_at ──
+
+describe("SLA clock isolation — P2-3", () => {
+  it("setting effort_bucket on a waiting-client ticket does NOT change waiting_client_since_at", async () => {
+    // Put the test ticket in 'waiting-client' with a stamped waiting_client_since_at
+    const waitingSince = new Date("2026-01-01T10:00:00Z");
+    await db
+      .update(tickets)
+      .set({
+        status: "waiting-client",
+        effortBucket: null,
+        waitingClientSinceAt: waitingSince,
+      })
+      .where(eq(tickets.id, testTicketId));
+
+    // Set the effort bucket — this is a common SE action on a waiting-client ticket
+    const effortResult = await setEffortBucket(
+      db,
+      testTicketId,
+      "platform-shared",
+      "user_se_actor"
+    );
+    expect(effortResult.ok).toBe(true);
+
+    // waiting_client_since_at must be unchanged (the SLA clock must not reset)
+    const rows = await db
+      .select({ waitingClientSinceAt: tickets.waitingClientSinceAt })
+      .from(tickets)
+      .where(eq(tickets.id, testTicketId))
+      .limit(1);
+
+    expect(rows[0]?.waitingClientSinceAt?.toISOString()).toBe(waitingSince.toISOString());
+
+    // Cleanup — reset ticket to a neutral state for other tests
+    await db
+      .update(tickets)
+      .set({ status: "on-you", effortBucket: null, waitingClientSinceAt: null })
+      .where(eq(tickets.id, testTicketId));
   });
 });

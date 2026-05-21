@@ -6,6 +6,14 @@
 // Idempotency: the idempotency_key + status transition guard prevent a double
 // post if the worker restarts mid-send (FIX 6).
 //
+// At-most-once send semantics (P2-1):
+//   Phase 1 uses at-most-once Slack sends. markOutboxRowFailed always sets
+//   status='failed' regardless of attempt count — there is NO retry-to-pending
+//   path. If a send fails (rate-limit, network error, etc.) the row is marked
+//   'failed', last_error records why, and the SE re-sends manually if needed.
+//   This prevents the duplicate-Slack-post risk that arises when a 'sent' row
+//   (already claimed by the worker) is reset to 'pending' and re-picked up.
+//
 // plan §Slice 5 / spec §3.7 / OQ-4
 
 import { and, eq, lte, sql } from "drizzle-orm";
@@ -160,18 +168,24 @@ export async function markOutboxRowSent(
 
 // ── Mark failed ───────────────────────────────────────────────────────────────
 
-const MAX_ATTEMPTS = 3;
-
 /**
- * Increment attempts and record the error. If attempts >= MAX_ATTEMPTS,
- * transition to 'failed'. Otherwise leaves the row 'pending' for retry.
+ * Mark an outbox row as failed and record the error.
+ *
+ * At-most-once semantics (P2-1): always sets status='failed'. There is NO
+ * retry-to-pending path. If a send fails the row stays 'failed' so the worker
+ * never re-picks it and sends a duplicate Slack post. The SE can re-send
+ * manually via the dispatch UI if the original send failed.
+ *
+ * The WHERE guard (`status = 'sent'`) ensures we never overwrite a row that
+ * was already 'canceled' or 'failed' by a concurrent call. attempts is
+ * incremented as an informational counter (starts at 0, set to 1 on failure).
  */
 export async function markOutboxRowFailed(
   db: Db,
   rowId: string,
   error: string
 ): Promise<void> {
-  // Fetch current attempts
+  // Fetch current attempts — needed only for the informational counter
   const rows = await db
     .select({ attempts: slackOutbox.attempts })
     .from(slackOutbox)
@@ -181,16 +195,20 @@ export async function markOutboxRowFailed(
   if (rows.length === 0) return;
 
   const newAttempts = (rows[0]!.attempts ?? 0) + 1;
-  const newStatus = newAttempts >= MAX_ATTEMPTS ? "failed" : "pending";
 
   await db
     .update(slackOutbox)
     .set({
       attempts: newAttempts,
       lastError: error,
-      status: newStatus,
+      status: "failed", // always failed — no retry-to-pending (P2-1)
     })
-    .where(eq(slackOutbox.id, rowId));
+    .where(
+      and(
+        eq(slackOutbox.id, rowId),
+        eq(slackOutbox.status, "sent") // only downgrade from 'sent'; guard canceled/failed rows
+      )
+    );
 }
 
 // ── Lookup by message_id (for undo) ──────────────────────────────────────────

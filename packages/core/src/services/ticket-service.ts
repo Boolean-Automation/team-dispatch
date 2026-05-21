@@ -32,6 +32,7 @@ function toDto(row: typeof tickets.$inferSelect): TicketDto {
     resolvedAt: row.resolvedAt?.toISOString() ?? null,
     slaDeadline: row.slaDeadline?.toISOString() ?? null,
     slaPaused: row.slaPaused,
+    waitingClientSinceAt: row.waitingClientSinceAt?.toISOString() ?? null,
     dismissedAt: row.dismissedAt?.toISOString() ?? null,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
@@ -196,7 +197,7 @@ export async function updateTicketStatus(
 ): Promise<UpdateTicketStatusResult> {
   // Fetch current ticket
   const rows = await db
-    .select({ id: tickets.id, status: tickets.status, effortBucket: tickets.effortBucket })
+    .select({ id: tickets.id, status: tickets.status, effortBucket: tickets.effortBucket, waitingClientSinceAt: tickets.waitingClientSinceAt })
     .from(tickets)
     .where(eq(tickets.id, ticketId))
     .limit(1);
@@ -246,6 +247,14 @@ export async function updateTicketStatus(
     }
   }
 
+  // P2-3: stamp/clear waiting_client_since_at on manual status transitions.
+  let waitingClientSinceAt: Date | null | undefined;
+  if (targetStatus === "waiting-client") {
+    waitingClientSinceAt = new Date(); // entering — stamp it
+  } else if (ticket.status === "waiting-client") {
+    waitingClientSinceAt = null; // leaving — clear it
+  }
+
   await db
     .update(tickets)
     .set({
@@ -253,6 +262,7 @@ export async function updateTicketStatus(
       updatedAt: new Date(),
       ...(resolvedAt ? { resolvedAt } : {}),
       ...(followUp1SentAt ? { followUp1SentAt } : {}),
+      ...(waitingClientSinceAt !== undefined ? { waitingClientSinceAt } : {}),
     })
     .where(eq(tickets.id, ticketId));
 

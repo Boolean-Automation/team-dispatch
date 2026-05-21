@@ -20,8 +20,7 @@
 import { eq, and, isNull } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import type { Db } from "@dispatch/db";
-import { tickets, auditLog, messages, reassignments, reinforcements, internalThreadMessages } from "@dispatch/db";
-import { cancelOutboxRow, getOutboxRowByMessageId } from "./outbox-service.js";
+import { tickets, auditLog, messages, reassignments, reinforcements, internalThreadMessages, slackOutbox } from "@dispatch/db";
 import { appendAudit as appendAuditEntry } from "./audit-service.js";
 
 export function generateUndoToken(): string {
@@ -30,7 +29,7 @@ export function generateUndoToken(): string {
 
 export type UndoResult =
   | { ok: true; action: string }
-  | { ok: false; reason: "not-found" | "already-undone" | "not-undoable" };
+  | { ok: false; reason: "not-found" | "already-undone" | "not-undoable" | "undo-too-late" };
 
 /**
  * Reverse a mutation by its undo_token.
@@ -221,34 +220,77 @@ export async function undoByToken(db: Db, token: string): Promise<UndoResult> {
       return { ok: true, action };
     }
 
-    // Undo reply send: branch on whether the outbox row is still pending or
-    // already sent (P2-L / OQ-4).
+    // Undo reply send: wrap the entire check-cancel-delete in a single DB
+    // transaction with a GUARDED cancel UPDATE to prevent TOCTOU races with
+    // the outbox worker (P1-1).
     //
-    //   pending → cancel the outbox row (worker skips canceled rows) + delete
-    //             the dispatch-side message record (send never happened)
-    //   sent    → the Slack message was already delivered; do NOT delete the
-    //             dispatch-side record. Instead, record an auditable
-    //             "retracted after send" entry. The Slack post is left in-place
-    //             (OQ-4: "does NOT delete the delivered Slack message").
-    //             TODO: enqueue a flagged correction-note post to the Slack thread.
+    // Flow:
+    //   1. Inside the transaction, attempt to atomically cancel the outbox row
+    //      by updating it from 'pending' → 'canceled'. Only 'pending' rows are
+    //      matched; a row already claimed as 'sent' by the worker will not match.
+    //   2. If the cancel UPDATE returned zero rows (worker already claimed it),
+    //      the undo BAILS: do NOT delete the message record and do NOT revert
+    //      the ticket status. Slack already posted it. Append an audit entry
+    //      noting the undo-too-late result and return "undo-too-late" to the caller.
+    //   3. If the cancel UPDATE succeeded, delete the message record and revert
+    //      the ticket status (if the send had resolved it).
+    //
+    // OQ-4: we never delete a Slack message; the Slack post is left in-place.
     const before = entry.before as { status?: string } | null;
 
     if (!msgAfter?.messageId) return { ok: false, reason: "not-undoable" };
 
-    // Look up the outbox row to determine its current state
-    const outboxRow = await getOutboxRowByMessageId(db, msgAfter.messageId);
+    // Capture as a local string so TypeScript narrows the type inside the
+    // transaction callback (the async closure would otherwise lose narrowing).
+    const messageId: string = msgAfter.messageId;
 
-    if (!outboxRow || outboxRow.status === "pending" || outboxRow.status === "canceled") {
-      // Within window (pending) or no outbox row: cancel + delete the message
-      await cancelOutboxRow(db, msgAfter.messageId);
+    let undoTooLate = false;
 
-      await db
+    await db.transaction(async (tx) => {
+      // Attempt atomic cancel: pending → canceled. If the row is already 'sent'
+      // (worker claimed it) this UPDATE matches nothing and returns [].
+      const canceled = await tx
+        .update(slackOutbox)
+        .set({ status: "canceled" })
+        .where(
+          and(
+            eq(slackOutbox.messageId, messageId),
+            eq(slackOutbox.status, "pending") // only cancel if still pending
+          )
+        )
+        .returning({ id: slackOutbox.id });
+
+      if (canceled.length === 0) {
+        // Worker already claimed the row — the Slack message is either in-flight
+        // or already delivered. Do NOT delete the dispatch-side record (OQ-4).
+        // Append an audit trail for the failed undo attempt.
+        await appendAuditEntry(tx, {
+          ticketId: entry.ticketId ?? null,
+          actorId: null,
+          event: "message.created", // closest event kind; undo-too-late context in after
+          after: {
+            retractedMessageId: msgAfter.messageId,
+            note: "undo-too-late: outbox row already claimed by worker; Slack post not deleted (OQ-4, P1-1).",
+          },
+        });
+        // Mark the audit entry as undone so we cannot attempt the token again
+        await tx
+          .update(auditLog)
+          .set({ meta: { ...(meta as Record<string, unknown>), undone: true } })
+          .where(eq(auditLog.id, entry.id));
+        undoTooLate = true;
+        return; // bail from transaction — no message-delete, no status revert
+      }
+
+      // Cancel succeeded — the outbox row is now 'canceled'. Delete the message
+      // record (the send never actually happened from Slack's perspective).
+      await tx
         .delete(messages)
-        .where(eq(messages.id, msgAfter.messageId));
+        .where(eq(messages.id, messageId));
 
       // Revert ticket status if the send also resolved the ticket
       if (msgAfter.resolvedTicket && entry.ticketId && before?.status) {
-        await db
+        await tx
           .update(tickets)
           .set({
             status: before.status as typeof tickets.$inferInsert["status"],
@@ -257,22 +299,10 @@ export async function undoByToken(db: Db, token: string): Promise<UndoResult> {
           })
           .where(eq(tickets.id, entry.ticketId));
       }
-    } else {
-      // Already sent (or failed) — Slack message may already be delivered.
-      // Do NOT delete the dispatch-side message (data integrity, OQ-4).
-      // Record an audit entry marking the retraction attempt.
-      await appendAuditEntry(db, {
-        ticketId: entry.ticketId ?? null,
-        actorId: null,
-        event: "message.created", // closest event kind; retraction context in after
-        after: {
-          retractedMessageId: msgAfter.messageId,
-          outboxStatus: outboxRow.status,
-          note: "undo-after-send: message retained; Slack post not deleted (OQ-4). TODO: post correction note to thread.",
-        },
-      });
-      // Note: ticket status revert is intentionally skipped when the send is
-      // already delivered — the status reflects reality (waiting-client etc.)
+    });
+
+    if (undoTooLate) {
+      return { ok: false, reason: "undo-too-late" };
     }
 
     action = "message.created";

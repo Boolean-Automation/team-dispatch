@@ -71,9 +71,13 @@ export default async function reassignmentRoutes(
       );
 
       if (!result.ok) {
-        const statusCode = result.error?.includes("not found") ? 404 : 400;
+        // P2-4: 409 Conflict when a pending reassignment already exists
+        const isConflict = (result as { _conflict?: boolean })._conflict === true;
+        const statusCode = isConflict ? 409 : result.error?.includes("not found") ? 404 : 400;
+        const errorLabel =
+          statusCode === 409 ? "Conflict" : statusCode === 404 ? "Not Found" : "Bad Request";
         return reply.status(statusCode).send({
-          error: statusCode === 404 ? "Not Found" : "Bad Request",
+          error: errorLabel,
           message: result.error,
           statusCode,
         });

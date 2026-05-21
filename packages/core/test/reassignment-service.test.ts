@@ -372,6 +372,102 @@ describe("Undo reassignment actions", () => {
   });
 });
 
+describe("Concurrent-pending guard (P2-4)", () => {
+  it("second initiateReassignment while a pending row exists is rejected with error", async () => {
+    await resetTicket();
+
+    // First initiation — creates a pending row
+    const first = await initiateReassignment(
+      db,
+      testTicketId,
+      SE_PROPOSER,
+      SE_RECIPIENT,
+      "se"
+    );
+    expect(first.ok).toBe(true);
+    expect(first.reassignment?.status).toBe("pending");
+
+    // Second initiation — should be rejected (pending row still exists)
+    const second = await initiateReassignment(
+      db,
+      testTicketId,
+      SE_PROPOSER,
+      SE_RECIPIENT,
+      "se"
+    );
+    expect(second.ok).toBe(false);
+    expect(second.error).toContain("pending reassignment already exists");
+  });
+
+  it("a new pending reassignment is allowed after the existing one is accepted", async () => {
+    await resetTicket();
+
+    // Create a pending reassignment and accept it
+    const initResult = await initiateReassignment(
+      db,
+      testTicketId,
+      SE_PROPOSER,
+      SE_RECIPIENT,
+      "se"
+    );
+    expect(initResult.ok).toBe(true);
+    const acceptResult = await acceptReassignment(
+      db,
+      initResult.reassignment!.id,
+      SE_RECIPIENT
+    );
+    expect(acceptResult.ok).toBe(true);
+
+    // Reset ticket back to SE_PROPOSER for next reassignment test
+    await db
+      .update(tickets)
+      .set({ assignee: SE_PROPOSER, status: "on-you" })
+      .where(eq(tickets.id, testTicketId));
+
+    // Now we should be able to create a new pending row (the old one is 'accepted')
+    const third = await initiateReassignment(
+      db,
+      testTicketId,
+      SE_PROPOSER,
+      SE_RECIPIENT,
+      "se"
+    );
+    expect(third.ok).toBe(true);
+    expect(third.reassignment?.status).toBe("pending");
+  });
+
+  it("a new pending reassignment is allowed after the existing one is rejected", async () => {
+    await resetTicket();
+
+    // Create a pending reassignment and reject it
+    const initResult = await initiateReassignment(
+      db,
+      testTicketId,
+      SE_PROPOSER,
+      SE_RECIPIENT,
+      "se"
+    );
+    expect(initResult.ok).toBe(true);
+    const rejectResult = await rejectReassignment(
+      db,
+      initResult.reassignment!.id,
+      SE_RECIPIENT
+    );
+    expect(rejectResult.ok).toBe(true);
+
+    // Now we should be able to create a new pending row (the old one is 'rejected')
+    const second = await initiateReassignment(
+      db,
+      testTicketId,
+      SE_PROPOSER,
+      SE_RECIPIENT,
+      "se"
+    );
+    expect(second.ok).toBe(true);
+    expect(second.reassignment?.status).toBe("pending");
+  });
+});
+
 describe("Notifications", () => {
   it("SE-initiated reassignment creates an incoming notification for recipient", async () => {
     await resetTicket();

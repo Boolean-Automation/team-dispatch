@@ -7,7 +7,7 @@
 
 import { eq, asc } from "drizzle-orm";
 import type { Db } from "@dispatch/db";
-import { internalThreadMessages, auditLog } from "@dispatch/db";
+import { internalThreadMessages } from "@dispatch/db";
 import type { InternalThreadMessage } from "@dispatch/db";
 import { appendAudit } from "./audit-service.js";
 import { generateUndoToken } from "./undo-service.js";

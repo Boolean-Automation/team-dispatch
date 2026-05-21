@@ -173,8 +173,16 @@ export const contacts = pgTable(
       .defaultNow(),
   },
   (t) => ({
-    emailUniq: uniqueIndex("contacts_email_uniq").on(t.email),
-    slackUserUniq: uniqueIndex("contacts_slack_user_uniq").on(t.slackUserId),
+    // Partial unique indexes matching 0000_init.sql:
+    //   WHERE email IS NOT NULL / WHERE slack_user_id IS NOT NULL
+    // Drizzle schema parity so a future drizzle-kit run cannot drop the partial
+    // predicates and replace them with non-partial indexes (P2-2).
+    emailUniq: uniqueIndex("contacts_email_uniq")
+      .on(t.email)
+      .where(sql`${t.email} IS NOT NULL`),
+    slackUserUniq: uniqueIndex("contacts_slack_user_uniq")
+      .on(t.slackUserId)
+      .where(sql`${t.slackUserId} IS NOT NULL`),
   })
 );
 
@@ -217,6 +225,12 @@ export const tickets = pgTable(
     resolvedAt: timestamp("resolved_at", { withTimezone: true }),
     slaDeadline: timestamp("sla_deadline", { withTimezone: true }),
     slaPaused: boolean("sla_paused").notNull().default(false),
+    // Stamped ONLY when the ticket transitions INTO 'waiting-client'.
+    // Cleared when the ticket transitions OUT of 'waiting-client'.
+    // The SLA timer reads this instead of updatedAt to measure the silence window
+    // so that unrelated ticket mutations (effort-bucket sets, audit appends) do
+    // not reset the follow-up clock. Added in migration 0005. (P2-3)
+    waitingClientSinceAt: timestamp("waiting_client_since_at", { withTimezone: true }),
     dismissedAt: timestamp("dismissed_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()

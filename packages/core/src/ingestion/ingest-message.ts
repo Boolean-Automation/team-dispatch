@@ -485,9 +485,17 @@ async function handleThreadReply(
     : null;
 
   if (clientReplyTargetStatus && parentRow) {
+    // P2-3: clear waiting_client_since_at when a client reply moves a ticket
+    // out of 'waiting-client'. The SLA timer skips rows where this is NULL.
+    const clearWaitingClientSince = parentRow.status === "waiting-client";
+
     await db
       .update(tickets)
-      .set({ status: clientReplyTargetStatus, updatedAt: new Date() })
+      .set({
+        status: clientReplyTargetStatus,
+        updatedAt: new Date(),
+        ...(clearWaitingClientSince ? { waitingClientSinceAt: null } : {}),
+      })
       .where(eq(tickets.id, parentTicketId));
 
     await appendAudit(db, {

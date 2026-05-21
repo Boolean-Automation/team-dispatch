@@ -434,9 +434,15 @@ describe("claimOutboxRow (P1-E: atomic claim)", () => {
   });
 });
 
-describe("markOutboxRowFailed", () => {
-  it("increments attempts and transitions to 'failed' at MAX_ATTEMPTS (3)", async () => {
-    const key = `test:failed:${Date.now()}`;
+// ── markOutboxRowFailed — at-most-once send semantics (P2-1) ──────────────────
+//
+// Phase 1 adopts at-most-once send semantics: markOutboxRowFailed always sets
+// status='failed' (no retry-to-pending path). This prevents the duplicate-post
+// race where a claimed 'sent' row was reset to 'pending' on Slack errors.
+
+describe("markOutboxRowFailed — at-most-once send semantics (P2-1)", () => {
+  it("transitions sent → failed immediately (no retry-to-pending)", async () => {
+    const key = `test:failed-atmost-once:${Date.now()}`;
     const msg7 = await db
       .insert(messages)
       .values({
@@ -457,25 +463,58 @@ describe("markOutboxRowFailed", () => {
       scheduledAt: new Date(Date.now() - 1000),
     });
 
-    // First two attempts — should stay pending
-    await markOutboxRowFailed(db, row.id, "error 1");
-    let updated = await db.select().from(slackOutbox).where(eq(slackOutbox.id, row.id)).limit(1);
-    expect(updated[0]?.status).toBe("pending");
-    expect(updated[0]?.attempts).toBe(1);
+    // Claim the row (simulates the outbox worker claiming it before Slack send)
+    await claimOutboxRow(db, row.id);
 
-    await markOutboxRowFailed(db, row.id, "error 2");
-    updated = await db.select().from(slackOutbox).where(eq(slackOutbox.id, row.id)).limit(1);
-    expect(updated[0]?.status).toBe("pending");
-    expect(updated[0]?.attempts).toBe(2);
+    // Simulate Slack rejecting the send — first failure
+    await markOutboxRowFailed(db, row.id, "rate-limited (429)");
+    const updated = await db.select().from(slackOutbox).where(eq(slackOutbox.id, row.id)).limit(1);
 
-    // Third attempt — should transition to 'failed'
-    await markOutboxRowFailed(db, row.id, "error 3");
-    updated = await db.select().from(slackOutbox).where(eq(slackOutbox.id, row.id)).limit(1);
+    // Must be 'failed' immediately — no retry-to-pending (P2-1)
     expect(updated[0]?.status).toBe("failed");
-    expect(updated[0]?.attempts).toBe(3);
-    expect(updated[0]?.lastError).toBe("error 3");
+    expect(updated[0]?.attempts).toBe(1);
+    expect(updated[0]?.lastError).toBe("rate-limited (429)");
+
+    // getDueOutboxRows must NOT re-pick this row (it's failed, not pending)
+    const due = await getDueOutboxRows(db);
+    expect(due.some((r) => r.id === row.id)).toBe(false);
 
     await db.delete(slackOutbox).where(eq(slackOutbox.id, row.id));
     await db.delete(messages).where(eq(messages.id, msg7[0]!.id));
+  });
+
+  it("WHERE status=sent guard: does not overwrite a canceled or already-failed row", async () => {
+    const key = `test:failed-guard:${Date.now()}`;
+    const msg8 = await db
+      .insert(messages)
+      .values({
+        ticketId: testTicketId,
+        direction: "outbound",
+        authorKind: "se",
+        authorRef: "user_outbox_test",
+        body: "Guard test message",
+      })
+      .returning();
+
+    const row = await insertOutboxRow(db, {
+      ticketId: testTicketId,
+      messageId: msg8[0]!.id,
+      idempotencyKey: key,
+      channelId: "C_OUTBOX_TEST",
+      payload: {},
+      scheduledAt: new Date(Date.now() + 30_000), // future (still pending)
+    });
+
+    // Cancel the row (pending → canceled) without ever claiming it
+    await cancelOutboxRow(db, msg8[0]!.id);
+
+    // markOutboxRowFailed should be a no-op on a canceled row (WHERE status='sent' guard)
+    await markOutboxRowFailed(db, row.id, "should not apply to canceled row");
+    const updated = await db.select().from(slackOutbox).where(eq(slackOutbox.id, row.id)).limit(1);
+    expect(updated[0]?.status).toBe("canceled"); // unchanged
+    expect(updated[0]?.lastError).toBeNull(); // not overwritten
+
+    await db.delete(slackOutbox).where(eq(slackOutbox.id, row.id));
+    await db.delete(messages).where(eq(messages.id, msg8[0]!.id));
   });
 });

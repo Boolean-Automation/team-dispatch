@@ -183,6 +183,15 @@ export async function sendReply(opts: SendReplyOpts): Promise<SendReplyResult> {
           ? new Date()
           : undefined;
 
+      // P2-3: stamp waiting_client_since_at ONLY when entering 'waiting-client';
+      // clear it when leaving 'waiting-client'.
+      let waitingClientSinceAt: Date | null | undefined;
+      if (targetStatus === "waiting-client") {
+        waitingClientSinceAt = new Date(); // entering — stamp it
+      } else if (ticket.status === "waiting-client") {
+        waitingClientSinceAt = null; // leaving — clear it
+      }
+
       await tx
         .update(tickets)
         .set({
@@ -190,6 +199,7 @@ export async function sendReply(opts: SendReplyOpts): Promise<SendReplyResult> {
           updatedAt: new Date(),
           ...(followUp1SentAt ? { followUp1SentAt } : {}),
           ...(firstResponseAtStamp ? { firstResponseAt: firstResponseAtStamp } : {}),
+          ...(waitingClientSinceAt !== undefined ? { waitingClientSinceAt } : {}),
         })
         .where(eq(tickets.id, ticketId));
     }
