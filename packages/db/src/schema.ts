@@ -28,6 +28,7 @@ import {
   timestamp,
   varchar,
   uniqueIndex,
+  index,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
@@ -225,10 +226,15 @@ export const tickets = pgTable(
       .defaultNow(),
   },
   (t) => ({
-    sourceDedup: uniqueIndex("tickets_source_dedup").on(
-      t.sourceChannelId,
-      t.sourceEventTs
-    ),
+    // Partial unique index matching 0000_init.sql:
+    // WHERE source_channel_id IS NOT NULL AND source_event_ts IS NOT NULL
+    // Drizzle uniqueIndex().where() encodes the partial predicate so a future
+    // drizzle-kit run cannot drift from the SQL definition (P2-J).
+    sourceDedup: uniqueIndex("tickets_source_dedup")
+      .on(t.sourceChannelId, t.sourceEventTs)
+      .where(
+        sql`${t.sourceChannelId} IS NOT NULL AND ${t.sourceEventTs} IS NOT NULL`
+      ),
   })
 );
 
@@ -239,24 +245,35 @@ export const tickets = pgTable(
 // spawn new Tickets (ADR-005 grain).
 // slack_ts: dedup key for thread-reply Messages (idempotency on re-delivery).
 
-export const messages = pgTable("messages", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  ticketId: uuid("ticket_id")
-    .notNull()
-    .references(() => tickets.id, { onDelete: "cascade" }),
-  direction: messageDirectionEnum("direction").notNull(),
-  authorKind: authorKindEnum("author_kind").notNull(),
-  authorRef: text("author_ref").notNull(),
-  // For client messages: Slack user id. For SE messages: Clerk user id.
-  body: text("body").notNull(),
-  slackTs: text("slack_ts"), // Dedup key for thread-reply re-delivery
-  postedAt: timestamp("posted_at", { withTimezone: true })
-    .notNull()
-    .defaultNow(),
-  createdAt: timestamp("created_at", { withTimezone: true })
-    .notNull()
-    .defaultNow(),
-});
+export const messages = pgTable(
+  "messages",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    ticketId: uuid("ticket_id")
+      .notNull()
+      .references(() => tickets.id, { onDelete: "cascade" }),
+    direction: messageDirectionEnum("direction").notNull(),
+    authorKind: authorKindEnum("author_kind").notNull(),
+    authorRef: text("author_ref").notNull(),
+    // For client messages: Slack user id. For SE messages: Clerk user id.
+    body: text("body").notNull(),
+    slackTs: text("slack_ts"), // Dedup key for thread-reply re-delivery
+    postedAt: timestamp("posted_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => ({
+    // Partial unique index matching 0000_init.sql:
+    // WHERE slack_ts IS NOT NULL
+    // Drizzle schema parity so a future drizzle-kit run cannot drift (P2-J).
+    slackTsUniq: uniqueIndex("messages_slack_ts_uniq")
+      .on(t.slackTs)
+      .where(sql`${t.slackTs} IS NOT NULL`),
+  })
+);
 
 // ── internal_thread_messages ──────────────────────────────────────────────────
 //

@@ -309,3 +309,64 @@ describe("getSlaState", () => {
     ).toBe("warn");
   });
 });
+
+// ── DST boundary tests (P2-K) ─────────────────────────────────────────────────
+//
+// 2024 DST spring-forward: Sun Mar 10 2024, clocks advance 2am→3am PT.
+//   Before spring: PST = UTC-8
+//   After spring:  PDT = UTC-7
+//
+// Business hours (6am–5pm PT) on Sun Mar 10 are irrelevant (weekend).
+// But Mon Mar 11 is the first weekday fully in PDT:
+//   6am PDT = 13:00 UTC (UTC-7)
+//   5pm PDT = 24:00 UTC = 00:00 UTC next day
+//
+// 2024 DST fall-back: Sun Nov 3 2024, clocks fall back 2am→1am PT.
+//   Before fall-back: PDT = UTC-7
+//   After fall-back:  PST = UTC-8
+//
+// Fri Nov 1 2024 is fully in PDT.
+// Mon Nov 4 2024 is fully in PST.
+
+describe("DST boundary correctness (P2-K)", () => {
+  it("isBusinessHours is correct at 6am PDT on the Monday after spring-forward (Mon Mar 11 2024)", () => {
+    // 6am PDT = UTC-7 → 6 + 7 = 13:00 UTC
+    const sixAmPdt = new Date(Date.UTC(2024, 2, 11, 13, 0)); // Mon Mar 11 2024 13:00 UTC
+    expect(isBusinessHours(sixAmPdt)).toBe(true);
+  });
+
+  it("isBusinessHours is false at 5:59am PDT (before window opens)", () => {
+    // 5:59am PDT = 12:59 UTC on Mon Mar 11 2024
+    const beforeOpen = new Date(Date.UTC(2024, 2, 11, 12, 59));
+    expect(isBusinessHours(beforeOpen)).toBe(false);
+  });
+
+  it("isBusinessHours is correct at 5pm PDT (end of window, exclusive)", () => {
+    // 5pm PDT = 17 + 7 = 24:00 UTC = 00:00 UTC next day
+    const fivePmPdt = new Date(Date.UTC(2024, 2, 12, 0, 0)); // midnight UTC = 5pm PDT Mar 11
+    expect(isBusinessHours(fivePmPdt)).toBe(false);
+  });
+
+  it("isBusinessHours is correct at 6am PST on the Monday after fall-back (Mon Nov 4 2024)", () => {
+    // 6am PST = UTC-8 → 6 + 8 = 14:00 UTC
+    const sixAmPst = new Date(Date.UTC(2024, 10, 4, 14, 0)); // Mon Nov 4 2024 14:00 UTC
+    expect(isBusinessHours(sixAmPst)).toBe(true);
+  });
+
+  it("isBusinessHours is false at 5:59am PST (before window opens)", () => {
+    // 5:59am PST = 13:59 UTC on Mon Nov 4 2024
+    const beforeOpen = new Date(Date.UTC(2024, 10, 4, 13, 59));
+    expect(isBusinessHours(beforeOpen)).toBe(false);
+  });
+
+  it("computeBusinessDuration handles a span that crosses the spring-forward DST transition", () => {
+    // Fri Mar 8 2024 (PST, UTC-8): 3pm PST to Mon Mar 11 2024 (PDT, UTC-7): 9am PDT
+    //   Fri 3pm–5pm PST = 120 min
+    //   Sat + Sun = 0 (weekend, plus DST transitions on Sun)
+    //   Mon 6am–9am PDT = 180 min
+    //   Total = 300 min
+    const start = new Date(Date.UTC(2024, 2, 8, 23, 0));  // Fri Mar 8 3pm PST (UTC-8 = 23:00 UTC)
+    const end   = new Date(Date.UTC(2024, 2, 11, 16, 0)); // Mon Mar 11 9am PDT (UTC-7 = 16:00 UTC)
+    expect(computeBusinessDuration(start, end)).toBe(300);
+  });
+});

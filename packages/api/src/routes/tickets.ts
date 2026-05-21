@@ -17,6 +17,7 @@ import { requireClerkSession } from "../plugins/clerk-auth.js";
 import {
   listTickets,
   getTicket,
+  getTicketByDisplayId,
   TicketListQuerySchema,
   TicketStatusSchema,
   createTicketManual,
@@ -62,15 +63,21 @@ export default async function ticketRoutes(
   );
 
   // GET /api/tickets/:id
+  // Accepts both UUID and display id (DSP-XXXX) — P1-D fix.
   fastify.get<TicketByIdRoute>(
     "/api/tickets/:id",
     { preHandler: requireClerkSession },
     async (request, reply) => {
-      const dto = await getTicket(fastify.db, request.params.id);
+      const { id } = request.params;
+      // Detect DSP- prefix (case-insensitive) → look up by display id
+      const dto = /^dsp-/i.test(id)
+        ? await getTicketByDisplayId(fastify.db, id.toUpperCase())
+        : await getTicket(fastify.db, id);
+
       if (!dto) {
         return reply.status(404).send({
           error: "Not Found",
-          message: `Ticket ${request.params.id} not found`,
+          message: `Ticket ${id} not found`,
           statusCode: 404,
         });
       }

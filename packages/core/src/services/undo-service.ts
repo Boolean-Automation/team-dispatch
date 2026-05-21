@@ -10,7 +10,8 @@ import { eq, and, isNull } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import type { Db } from "@dispatch/db";
 import { tickets, auditLog, messages } from "@dispatch/db";
-import { cancelOutboxRow } from "./outbox-service.js";
+import { cancelOutboxRow, getOutboxRowByMessageId } from "./outbox-service.js";
+import { appendAudit as appendAuditEntry } from "./audit-service.js";
 
 export function generateUndoToken(): string {
   return randomUUID();
@@ -97,8 +98,16 @@ export async function undoByToken(db: Db, token: string): Promise<UndoResult> {
       .where(eq(tickets.id, entry.ticketId));
     action = "ticket.assigned";
   } else if (event === "message.created") {
-    // Undo reply send: cancel the outbox row (if within window) + soft-delete
-    // the outbound Message + revert ticket status if it was resolved.
+    // Undo reply send: branch on whether the outbox row is still pending or
+    // already sent (P2-L / OQ-4).
+    //
+    //   pending → cancel the outbox row (worker skips canceled rows) + delete
+    //             the dispatch-side message record (send never happened)
+    //   sent    → the Slack message was already delivered; do NOT delete the
+    //             dispatch-side record. Instead, record an auditable
+    //             "retracted after send" entry. The Slack post is left in-place
+    //             (OQ-4: "does NOT delete the delivered Slack message").
+    //             TODO: enqueue a flagged correction-note post to the Slack thread.
     const after = entry.after as {
       messageId?: string;
       resolvedTicket?: boolean;
@@ -107,25 +116,44 @@ export async function undoByToken(db: Db, token: string): Promise<UndoResult> {
 
     if (!after?.messageId) return { ok: false, reason: "not-undoable" };
 
-    // Cancel the outbox row — if already past the window (sent), we still
-    // soft-delete the dispatch-side record (the plan's OQ-4 resolution).
-    await cancelOutboxRow(db, after.messageId);
+    // Look up the outbox row to determine its current state
+    const outboxRow = await getOutboxRowByMessageId(db, after.messageId);
 
-    // Soft-delete the outbound Message by removing it
-    await db
-      .delete(messages)
-      .where(eq(messages.id, after.messageId));
+    if (!outboxRow || outboxRow.status === "pending" || outboxRow.status === "canceled") {
+      // Within window (pending) or no outbox row: cancel + delete the message
+      await cancelOutboxRow(db, after.messageId);
 
-    // Revert ticket status if the send also resolved the ticket
-    if (after.resolvedTicket && entry.ticketId && before?.status) {
       await db
-        .update(tickets)
-        .set({
-          status: before.status as typeof tickets.$inferInsert["status"],
-          resolvedAt: null,
-          updatedAt: new Date(),
-        })
-        .where(eq(tickets.id, entry.ticketId));
+        .delete(messages)
+        .where(eq(messages.id, after.messageId));
+
+      // Revert ticket status if the send also resolved the ticket
+      if (after.resolvedTicket && entry.ticketId && before?.status) {
+        await db
+          .update(tickets)
+          .set({
+            status: before.status as typeof tickets.$inferInsert["status"],
+            resolvedAt: null,
+            updatedAt: new Date(),
+          })
+          .where(eq(tickets.id, entry.ticketId));
+      }
+    } else {
+      // Already sent (or failed) — Slack message may already be delivered.
+      // Do NOT delete the dispatch-side message (data integrity, OQ-4).
+      // Record an audit entry marking the retraction attempt.
+      await appendAuditEntry(db, {
+        ticketId: entry.ticketId ?? null,
+        actorId: null,
+        event: "message.created", // closest event kind; retraction context in after
+        after: {
+          retractedMessageId: after.messageId,
+          outboxStatus: outboxRow.status,
+          note: "undo-after-send: message retained; Slack post not deleted (OQ-4). TODO: post correction note to thread.",
+        },
+      });
+      // Note: ticket status revert is intentionally skipped when the send is
+      // already delivered — the status reflects reality (waiting-client etc.)
     }
 
     action = "message.created";

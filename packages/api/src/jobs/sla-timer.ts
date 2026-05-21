@@ -73,8 +73,9 @@ async function advanceWaitingClient(db: Db, now: Date): Promise<void> {
 
     if (!hasExceededBusinessDays(silentSince, 2, now)) continue;
 
-    // Advance to follow-up-required
-    await db
+    // Advance to follow-up-required — only emit audit/notify if the UPDATE
+    // actually moved the row (P2-G: guard against concurrent/manual transitions)
+    const advanced = await db
       .update(tickets)
       .set({ status: "follow-up-required", updatedAt: new Date() })
       .where(
@@ -82,7 +83,10 @@ async function advanceWaitingClient(db: Db, now: Date): Promise<void> {
           eq(tickets.id, ticket.id),
           eq(tickets.status, "waiting-client") // re-check to guard races
         )
-      );
+      )
+      .returning({ id: tickets.id });
+
+    if (advanced.length === 0) continue; // another process already moved it
 
     // Audit log
     await appendAudit(db, {
@@ -139,8 +143,9 @@ async function advanceFollowUp1Sent(db: Db, now: Date): Promise<void> {
 
     if (!hasExceededBusinessDays(ticket.followUp1SentAt, 3, now)) continue;
 
-    // Advance to closeout
-    await db
+    // Advance to closeout — only emit audit/notify if the UPDATE actually moved
+    // the row (P2-G: guard against concurrent/manual transitions)
+    const advanced = await db
       .update(tickets)
       .set({ status: "closeout", updatedAt: new Date() })
       .where(
@@ -148,7 +153,10 @@ async function advanceFollowUp1Sent(db: Db, now: Date): Promise<void> {
           eq(tickets.id, ticket.id),
           eq(tickets.status, "follow-up-1-sent") // re-check to guard races
         )
-      );
+      )
+      .returning({ id: tickets.id });
+
+    if (advanced.length === 0) continue; // another process already moved it
 
     // Audit log
     await appendAudit(db, {

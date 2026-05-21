@@ -22,6 +22,7 @@ import {
   markOutboxRowSent,
   markOutboxRowFailed,
   getOutboxRowByMessageId,
+  claimOutboxRow,
 } from "../src/services/outbox-service.js";
 import type { Db } from "../../db/src/client.js";
 import { eq } from "drizzle-orm";
@@ -354,6 +355,82 @@ describe("markOutboxRowSent (idempotency guard — double-post prevention)", () 
 
     await db.delete(slackOutbox).where(eq(slackOutbox.id, row.id));
     await db.delete(messages).where(eq(messages.id, msg6[0]!.id));
+  });
+});
+
+// ── claimOutboxRow (P1-E: atomic claim for double-post prevention) ────────────
+
+describe("claimOutboxRow (P1-E: atomic claim)", () => {
+  it("atomically claims a pending row — transitions pending→sent and returns the id", async () => {
+    const key = `test:claim:${Date.now()}`;
+    const msg = await db
+      .insert(messages)
+      .values({
+        ticketId: testTicketId,
+        direction: "outbound",
+        authorKind: "se",
+        authorRef: "user_claim_test",
+        body: "Claim test message",
+      })
+      .returning();
+
+    const row = await insertOutboxRow(db, {
+      ticketId: testTicketId,
+      messageId: msg[0]!.id,
+      idempotencyKey: key,
+      channelId: "C_CLAIM_TEST",
+      payload: {},
+      scheduledAt: new Date(Date.now() - 1000),
+    });
+
+    const claimed = await claimOutboxRow(db, row.id);
+    expect(claimed).not.toBeNull();
+    expect(claimed?.id).toBe(row.id);
+
+    // Row is now 'sent'
+    const updated = await db
+      .select({ status: slackOutbox.status })
+      .from(slackOutbox)
+      .where(eq(slackOutbox.id, row.id))
+      .limit(1);
+    expect(updated[0]?.status).toBe("sent");
+
+    await db.delete(slackOutbox).where(eq(slackOutbox.id, row.id));
+    await db.delete(messages).where(eq(messages.id, msg[0]!.id));
+  });
+
+  it("concurrent second claim of the same row returns null (double-post guard)", async () => {
+    const key = `test:claim2:${Date.now()}`;
+    const msg = await db
+      .insert(messages)
+      .values({
+        ticketId: testTicketId,
+        direction: "outbound",
+        authorKind: "se",
+        authorRef: "user_claim_test2",
+        body: "Concurrent claim test",
+      })
+      .returning();
+
+    const row = await insertOutboxRow(db, {
+      ticketId: testTicketId,
+      messageId: msg[0]!.id,
+      idempotencyKey: key,
+      channelId: "C_CLAIM_TEST",
+      payload: {},
+      scheduledAt: new Date(Date.now() - 1000),
+    });
+
+    // First claim succeeds
+    const firstClaim = await claimOutboxRow(db, row.id);
+    expect(firstClaim).not.toBeNull();
+
+    // Second claim returns null — row is already 'sent', not 'pending'
+    const secondClaim = await claimOutboxRow(db, row.id);
+    expect(secondClaim).toBeNull();
+
+    await db.delete(slackOutbox).where(eq(slackOutbox.id, row.id));
+    await db.delete(messages).where(eq(messages.id, msg[0]!.id));
   });
 });
 

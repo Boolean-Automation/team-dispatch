@@ -232,12 +232,27 @@ export async function updateTicketStatus(
   const resolvedAt =
     targetStatus === "closed" || targetStatus === "complete" ? new Date() : undefined;
 
+  // P2-H: stamp follow_up_1_sent_at when manually entering follow-up-1-sent
+  // (only if not already set — avoids overwriting an earlier stamp)
+  let followUp1SentAt: Date | undefined;
+  if (targetStatus === "follow-up-1-sent") {
+    const existing = await db
+      .select({ followUp1SentAt: tickets.followUp1SentAt })
+      .from(tickets)
+      .where(eq(tickets.id, ticketId))
+      .limit(1);
+    if (!existing[0]?.followUp1SentAt) {
+      followUp1SentAt = new Date();
+    }
+  }
+
   await db
     .update(tickets)
     .set({
       status: targetStatus,
       updatedAt: new Date(),
       ...(resolvedAt ? { resolvedAt } : {}),
+      ...(followUp1SentAt ? { followUp1SentAt } : {}),
     })
     .where(eq(tickets.id, ticketId));
 

@@ -12,6 +12,7 @@
 import { createDb } from "../src/client.js";
 import { accounts } from "../src/schema.js";
 import { buildRegistry } from "../../core/src/registry/build-registry.js";
+import { UNROUTED_ACCOUNT_SLUG } from "../../core/src/services/contact-discovery.js";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -55,6 +56,20 @@ async function main() {
     console.log(`  upserted: ${entry.slug}`);
   }
 
+  // Ensure the reserved quarantine account always exists in seeded environments (P1-B)
+  await db
+    .insert(accounts)
+    .values({
+      slug: UNROUTED_ACCOUNT_SLUG,
+      displayName: "Unrouted — unknown origin",
+      emailDomains: [],
+      slackChannelIds: [],
+      owningSe: null,
+      health: "good",
+    })
+    .onConflictDoNothing();
+
+  console.log(`  upserted: ${UNROUTED_ACCOUNT_SLUG} (quarantine account)`);
   console.log("Seed complete.");
   process.exit(0);
 }

@@ -3,13 +3,19 @@
 // Applies the ingestion rule (spec §5.1):
 //   - Top-level message in a client channel → one Ticket on the matching Account
 //   - Top-level message in a registered internal channel → no Ticket
-//   - Unknown origin → Ticket, unassigned, origin_class = 'unknown'
+//   - DM from a discovered Contact → Ticket on that Contact's Account (FIX 2 / A9)
+//   - Group-DM resolved to a single client Account → Ticket on that Account
+//   - Unknown origin → Ticket, unassigned, origin_class = 'unknown', on __unrouted__ account (A10)
 //   - Thread reply → Message on the parent Ticket, no new Ticket
 //
 // Idempotent on (channelId, eventTs): same event delivered twice yields
 // exactly one Ticket or one Message. Dedup key is PERSISTED via:
 //   tickets.source_channel_id + tickets.source_event_ts (unique index)
 //   messages.slack_ts (dedup key for replies)
+//
+// Race safety: INSERT ... ON CONFLICT DO NOTHING ... RETURNING — concurrent
+// re-delivery races are resolved at the DB layer, never throw on the unique
+// index (P1-C).
 //
 // Orphan replies (thread reply arrives before parent is ingested):
 //   logged + handled gracefully; no crash, no drop, no fabricated parent.
@@ -28,6 +34,11 @@ import { appendAudit } from "../services/audit-service.js";
 import { createNotification } from "../services/notification-service.js";
 import { generateUndoToken } from "../services/undo-service.js";
 import { resolveClientReplyTransition } from "../services/status-ladder.js";
+import {
+  resolveContactBySlackUser,
+  resolveGroupDmAccount,
+  findOrCreateUnroutedAccount,
+} from "../services/contact-discovery.js";
 
 // ── Result types ───────────────────────────────────────────────────────────────
 
@@ -90,28 +101,20 @@ export async function ingestMessage(
 
   // ── Top-level message path ────────────────────────────────────────────────────
 
-  // Classify the channel
+  // Determine effective source kind (default 'channel' for backward compat)
+  const sourceKind = event.sourceKind ?? "channel";
+
+  // ── DM / group-DM resolution (P1-A / FIX 2) ──────────────────────────────────
+  if (sourceKind === "dm" || sourceKind === "group-dm") {
+    return await handleDmTopLevel(db, event, sourceKind);
+  }
+
+  // ── Channel classification ────────────────────────────────────────────────────
   const { originClass, entry } = classifyOrigin(event.channelId, registry);
 
   if (originClass === "internal") {
     // Internal channel — no Ticket
     return { kind: "internal-channel" };
-  }
-
-  // Idempotency check: has this (channelId, eventTs) already been ingested?
-  const existing = await db
-    .select({ id: tickets.id })
-    .from(tickets)
-    .where(
-      and(
-        eq(tickets.sourceChannelId, event.channelId),
-        eq(tickets.sourceEventTs, event.eventTs)
-      )
-    )
-    .limit(1);
-
-  if (existing.length > 0) {
-    return { kind: "ticket-exists", ticketId: existing[0]!.id };
   }
 
   // Resolve account id for client-origin tickets
@@ -127,58 +130,208 @@ export async function ingestMessage(
     resolvedAccountId = acctRows[0]?.id ?? null;
   }
 
+  if (originClass === "client" && !resolvedAccountId) {
+    // Channel is registered as a client channel but account not in DB yet.
+    // Fall through to unknown-origin handling.
+  }
+
+  if (originClass === "unknown" || !resolvedAccountId) {
+    // Unknown origin: attach to the reserved __unrouted__ quarantine account.
+    // Do NOT route (P1-B / A10).
+    return await createUnknownOriginTicket(db, event, sourceKind);
+  }
+
+  // ── Client-origin ticket: INSERT ... ON CONFLICT DO NOTHING (P1-C) ───────────
+  return await createClientTicket(db, event, resolvedAccountId, sourceKind, originClass as "client");
+}
+
+// ── DM / group-DM handling ────────────────────────────────────────────────────
+
+async function handleDmTopLevel(
+  db: Db,
+  event: IngestionEvent,
+  sourceKind: "dm" | "group-dm"
+): Promise<IngestResult> {
+  let resolvedAccountId: string | null = null;
+
+  if (sourceKind === "dm") {
+    // Resolve by author's Slack user id → contacts row → account
+    const contact = await resolveContactBySlackUser(db, event.authorRef);
+    resolvedAccountId = contact?.accountId ?? null;
+  } else {
+    // group-dm: resolve via all participants
+    const participants = event.participantUserIds ?? [event.authorRef];
+    resolvedAccountId = await resolveGroupDmAccount(db, participants);
+  }
+
   if (!resolvedAccountId) {
-    // Unknown origin or account not found in DB — we need an account to create a ticket.
-    // Use any account with a matching channel id as a fallback, else skip for now.
-    // Per plan: unknown-origin tickets need an account. We create them on a
-    // "catch-all" basis: use the first account in the DB if none matches, or
-    // handle as unassigned with a synthetic unknown account context.
-    //
-    // For Phase 1: if we cannot resolve an account, we still create the ticket
-    // but we need SOME account_id. We require at least one account to exist.
-    // In practice, unknown-origin tickets in the demo always have at least
-    // the default seeded accounts.
-    //
-    // Look for any account whose slack_channel_ids includes this channel:
-    const allAccounts = await db
-      .select({ id: accounts.id, slackChannelIds: accounts.slackChannelIds })
-      .from(accounts)
-      .limit(100);
+    // No discovered Contact → unknown origin
+    return await createUnknownOriginTicket(db, event, sourceKind);
+  }
 
-    const match = allAccounts.find((a) =>
-      a.slackChannelIds.includes(event.channelId)
-    );
+  // Found a client account via contact discovery
+  return await createClientTicket(db, event, resolvedAccountId, sourceKind, "client");
+}
 
-    if (match) {
-      resolvedAccountId = match.id;
-    } else {
-      // Truly unknown: pick the first account as a triage target
-      resolvedAccountId = allAccounts[0]?.id ?? null;
+// ── Create unknown-origin ticket on __unrouted__ account (P1-B / A10) ────────
+//
+// Unknown-origin tickets are:
+//   - attached to the __unrouted__ quarantine account
+//   - NOT routed (assignee stays null)
+//   - origin_class = 'unknown'
+
+async function createUnknownOriginTicket(
+  db: Db,
+  event: IngestionEvent,
+  sourceKind: "channel" | "dm" | "group-dm" | "email"
+): Promise<IngestResult> {
+  // Idempotency check (fast path) — P1-C
+  if (event.channelId && event.eventTs) {
+    const existing = await db
+      .select({ id: tickets.id })
+      .from(tickets)
+      .where(
+        and(
+          eq(tickets.sourceChannelId, event.channelId),
+          eq(tickets.sourceEventTs, event.eventTs)
+        )
+      )
+      .limit(1);
+
+    if (existing.length > 0) {
+      return { kind: "ticket-exists", ticketId: existing[0]!.id };
     }
   }
 
-  if (!resolvedAccountId) {
-    // No accounts in the database at all — cannot create ticket
-    return { kind: "internal-channel" }; // treat as no-op (edge case in tests)
-  }
-
-  // Create the Ticket
+  const unroutedAccountId = await findOrCreateUnroutedAccount(db);
   const undoToken = generateUndoToken();
 
-  const ticketRows = await db
+  // INSERT ... ON CONFLICT DO NOTHING ... RETURNING (P1-C race-safety)
+  const inserted = await db
+    .insert(tickets)
+    .values({
+      accountId: unroutedAccountId,
+      status: "new",
+      type: "other",
+      sourceKind,
+      sourceChannelId: event.channelId,
+      sourceEventTs: event.eventTs,
+      originClass: "unknown",
+      // assignee stays null — unknown-origin tickets are not routed (A10)
+    })
+    .onConflictDoNothing()
+    .returning();
+
+  if (inserted.length === 0) {
+    // Concurrent insert won — re-select and return ticket-exists
+    const existing = await db
+      .select({ id: tickets.id })
+      .from(tickets)
+      .where(
+        and(
+          eq(tickets.sourceChannelId, event.channelId),
+          eq(tickets.sourceEventTs, event.eventTs)
+        )
+      )
+      .limit(1);
+
+    return { kind: "ticket-exists", ticketId: existing[0]!.id };
+  }
+
+  const ticket = inserted[0]!;
+
+  // Insert the originating message
+  await db.insert(messages).values({
+    ticketId: ticket.id,
+    direction: "inbound",
+    authorKind: "client",
+    authorRef: event.authorRef,
+    body: event.body,
+    slackTs: event.eventTs,
+  });
+
+  // Audit log — no routing, no notification (A10: unassigned)
+  await appendAudit(db, {
+    ticketId: ticket.id,
+    actorId: null,
+    event: "ticket.created",
+    after: {
+      ticketId: ticket.id,
+      originClass: "unknown",
+      accountId: unroutedAccountId,
+      unrouted: true,
+    },
+    undoToken,
+  });
+
+  return {
+    kind: "ticket-created",
+    ticketId: ticket.id,
+    accountId: unroutedAccountId,
+    originClass: "unknown",
+    undoToken,
+  };
+}
+
+// ── Create client-origin ticket (P1-C race-safe) ─────────────────────────────
+
+async function createClientTicket(
+  db: Db,
+  event: IngestionEvent,
+  resolvedAccountId: string,
+  sourceKind: "channel" | "dm" | "group-dm" | "email",
+  originClass: "client"
+): Promise<IngestResult> {
+  // Idempotency check (fast path) — P1-C
+  const existing = await db
+    .select({ id: tickets.id })
+    .from(tickets)
+    .where(
+      and(
+        eq(tickets.sourceChannelId, event.channelId),
+        eq(tickets.sourceEventTs, event.eventTs)
+      )
+    )
+    .limit(1);
+
+  if (existing.length > 0) {
+    return { kind: "ticket-exists", ticketId: existing[0]!.id };
+  }
+
+  const undoToken = generateUndoToken();
+
+  // INSERT ... ON CONFLICT DO NOTHING ... RETURNING (P1-C race-safety)
+  const inserted = await db
     .insert(tickets)
     .values({
       accountId: resolvedAccountId,
       status: "new",
-      type: "other", // will be classified by future NLP in later phases
-      sourceKind: "channel",
+      type: "other",
+      sourceKind,
       sourceChannelId: event.channelId,
       sourceEventTs: event.eventTs,
-      originClass: originClass === "client" ? "client" : "unknown",
+      originClass,
     })
+    .onConflictDoNothing()
     .returning();
 
-  const ticket = ticketRows[0]!;
+  if (inserted.length === 0) {
+    // Concurrent insert won — re-select and return ticket-exists
+    const existing2 = await db
+      .select({ id: tickets.id })
+      .from(tickets)
+      .where(
+        and(
+          eq(tickets.sourceChannelId, event.channelId),
+          eq(tickets.sourceEventTs, event.eventTs)
+        )
+      )
+      .limit(1);
+
+    return { kind: "ticket-exists", ticketId: existing2[0]!.id };
+  }
+
+  const ticket = inserted[0]!;
 
   // Insert the originating message
   await db.insert(messages).values({
@@ -196,7 +349,7 @@ export async function ingestMessage(
   // Audit log
   await appendAudit(db, {
     ticketId: ticket.id,
-    actorId: null, // system event
+    actorId: null,
     event: "ticket.created",
     after: { ticketId: ticket.id, originClass, accountId: resolvedAccountId },
     undoToken,
@@ -224,7 +377,7 @@ export async function ingestMessage(
     kind: "ticket-created",
     ticketId: ticket.id,
     accountId: resolvedAccountId,
-    originClass: originClass === "client" ? "client" : "unknown",
+    originClass,
     undoToken,
   };
 }
@@ -262,7 +415,6 @@ async function handleThreadReply(
 
   if (parentTickets.length === 0) {
     // Orphan reply: parent not yet ingested
-    // Log and return gracefully — do not crash, do not drop, do not fabricate
     console.warn(
       `[dispatch] orphan-reply: no parent ticket found for channel=${event.channelId} threadTs=${threadTs} eventTs=${event.eventTs}`
     );
@@ -276,29 +428,51 @@ async function handleThreadReply(
 
   const parentTicketId = parentTickets[0]!.id;
 
-  // Idempotency check: has this reply already been ingested?
-  const existingMsg = await db
-    .select({ id: messages.id })
-    .from(messages)
-    .where(
-      and(
-        eq(messages.ticketId, parentTicketId),
-        eq(messages.slackTs, event.eventTs)
-      )
-    )
-    .limit(1);
-
-  if (existingMsg.length > 0) {
-    return {
-      kind: "message-exists",
-      messageId: existingMsg[0]!.id,
+  // INSERT ... ON CONFLICT DO NOTHING for thread-reply dedup (P1-C)
+  // Conflict target: messages.slack_ts unique index
+  const insertedMsg = await db
+    .insert(messages)
+    .values({
       ticketId: parentTicketId,
+      direction: "inbound",
+      authorKind: "client",
+      authorRef: event.authorRef,
+      body: event.body,
+      slackTs: event.eventTs,
+    })
+    .onConflictDoNothing()
+    .returning();
+
+  if (insertedMsg.length === 0) {
+    // Concurrent re-delivery — re-select and return message-exists cleanly
+    const existingMsg = await db
+      .select({ id: messages.id })
+      .from(messages)
+      .where(
+        and(
+          eq(messages.ticketId, parentTicketId),
+          eq(messages.slackTs, event.eventTs)
+        )
+      )
+      .limit(1);
+
+    if (existingMsg.length > 0) {
+      return {
+        kind: "message-exists",
+        messageId: existingMsg[0]!.id,
+        ticketId: parentTicketId,
+      };
+    }
+    // Fallback (should not happen): return orphan-reply to signal something unexpected
+    return {
+      kind: "orphan-reply",
+      channelId: event.channelId,
+      eventTs: event.eventTs,
+      threadTs,
     };
   }
 
-  // Apply client-reply status transitions (A16 / A17):
-  //   waiting-client → on-you  (A16: client replied while we were waiting)
-  //   closed         → on-you  (A17: client reply reopens a closed ticket)
+  // Message was newly inserted — apply client-reply status transitions
   const parentTicketStatus = await db
     .select({ status: tickets.status, assignee: tickets.assignee })
     .from(tickets)
@@ -328,11 +502,10 @@ async function handleThreadReply(
       },
     });
 
-    // Notify the owning SE that the client replied
     if (parentRow.assignee) {
       await createNotification(db, {
         recipientId: parentRow.assignee,
-        kind: "ticket-assigned", // closest available kind; dedicated kind in later phase
+        kind: "ticket-assigned",
         ticketId: parentTicketId,
         payload: {
           event: "client-replied",
@@ -343,22 +516,8 @@ async function handleThreadReply(
     }
   }
 
-  // Create the thread-reply Message
+  const msg = insertedMsg[0]!;
   const undoToken = generateUndoToken();
-
-  const msgRows = await db
-    .insert(messages)
-    .values({
-      ticketId: parentTicketId,
-      direction: "inbound",
-      authorKind: "client",
-      authorRef: event.authorRef,
-      body: event.body,
-      slackTs: event.eventTs,
-    })
-    .returning();
-
-  const msg = msgRows[0]!;
 
   // Audit log
   await appendAudit(db, {

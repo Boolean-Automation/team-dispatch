@@ -12,7 +12,7 @@
 // channel resolves to a Contact → Account. A DM author who matches no
 // discovered Contact falls into the unknown-origin path.
 
-import { eq, and } from "drizzle-orm";
+import { eq, and, inArray } from "drizzle-orm";
 import type { Db } from "@dispatch/db";
 import { contacts, accounts } from "@dispatch/db";
 import type { Contact } from "@dispatch/db";
@@ -176,28 +176,52 @@ export async function resolveGroupDmAccount(
   const matched = await db
     .select({ accountId: contacts.accountId, slackUserId: contacts.slackUserId })
     .from(contacts)
-    .where(
-      and(
-        // Match any of the participants
-        // Using a manual IN-style check since Drizzle requires inArray import
-        eq(contacts.slackUserId, participantSlackUserIds[0]!)
-      )
-    )
-    .limit(participantSlackUserIds.length * 2);
+    .where(inArray(contacts.slackUserId, participantSlackUserIds));
 
-  // Filter to only matching participants
-  const matchedContacts = matched.filter((c) =>
-    participantSlackUserIds.includes(c.slackUserId!)
-  );
-
-  if (matchedContacts.length === 0) return null;
+  if (matched.length === 0) return null;
 
   // Check if all matched contacts map to the same account
-  const accountIds = new Set(matchedContacts.map((c) => c.accountId));
+  const accountIds = new Set(matched.map((c) => c.accountId));
   if (accountIds.size === 1) {
-    return matchedContacts[0]!.accountId;
+    return matched[0]!.accountId;
   }
 
-  // Multiple accounts represented — ambiguous
+  // Multiple accounts represented — ambiguous group-DM spanning two client accounts
   return null;
+}
+
+// ── __unrouted__ quarantine account ──────────────────────────────────────────
+//
+// Unknown-origin tickets must not land on a real client account.
+// This find-or-create helper returns the id of the reserved quarantine account.
+// Slug '__unrouted__', owning_se = null (no SE owns it).
+
+export const UNROUTED_ACCOUNT_SLUG = "__unrouted__";
+
+export async function findOrCreateUnroutedAccount(db: Db): Promise<string> {
+  // INSERT ... ON CONFLICT DO NOTHING to handle concurrent find-or-create calls.
+  // The INSERT may return nothing if another caller raced us — re-SELECT in that case.
+  const inserted = await db
+    .insert(accounts)
+    .values({
+      slug: UNROUTED_ACCOUNT_SLUG,
+      displayName: "Unrouted — unknown origin",
+      emailDomains: [],
+      slackChannelIds: [],
+      owningSe: null,
+      health: "good",
+    })
+    .onConflictDoNothing()
+    .returning({ id: accounts.id });
+
+  if (inserted[0]) return inserted[0].id;
+
+  // Already existed — re-select
+  const existing = await db
+    .select({ id: accounts.id })
+    .from(accounts)
+    .where(eq(accounts.slug, UNROUTED_ACCOUNT_SLUG))
+    .limit(1);
+
+  return existing[0]!.id;
 }

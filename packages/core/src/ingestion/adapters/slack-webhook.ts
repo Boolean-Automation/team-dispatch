@@ -31,6 +31,8 @@ export interface SlackEventCallback {
 export interface SlackMessageEvent {
   type: "message";
   channel: string;
+  /** channel_type: 'channel' | 'group' | 'im' | 'mpim' — Slack Events API field */
+  channel_type?: string;
   user?: string;
   bot_id?: string;
   text: string;
@@ -117,6 +119,7 @@ export function normalizeSlackPayload(
   const threadTs = event["thread_ts"];
   const user = event["user"];
   const text = event["text"];
+  const channelType = event["channel_type"];
 
   if (typeof channel !== "string" || typeof ts !== "string") {
     return { kind: "ignored", reason: "missing channel or ts" };
@@ -130,6 +133,16 @@ export function normalizeSlackPayload(
   const isReply =
     typeof threadTs === "string" && threadTs !== ts;
 
+  // Map Slack channel_type to our sourceKind enum (P1-A / FIX 2):
+  //   'im'   → 'dm'       (1:1 direct message)
+  //   'mpim' → 'group-dm' (multi-party IM)
+  //   else   → 'channel'  (public/private channel)
+  let sourceKind: "channel" | "dm" | "group-dm" = "channel";
+  if (typeof channelType === "string") {
+    if (channelType === "im") sourceKind = "dm";
+    else if (channelType === "mpim") sourceKind = "group-dm";
+  }
+
   const ingestionEvent: IngestionEvent = {
     source: "slack",
     channelId: channel,
@@ -138,6 +151,7 @@ export function normalizeSlackPayload(
     authorRef,
     body,
     isTopLevel: !isReply,
+    sourceKind,
   };
 
   return { kind: "event", event: ingestionEvent };

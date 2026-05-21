@@ -18,6 +18,10 @@ export interface StubEventInput {
   authorRef?: string;
   /** Defaults to 'Stub event body' */
   body?: string;
+  /** Optional: 'channel' | 'dm' | 'group-dm' | 'email' — defaults to 'channel' */
+  sourceKind?: "channel" | "dm" | "group-dm" | "email";
+  /** For group-DM stubs: participant Slack user ids */
+  participantUserIds?: string[];
 }
 
 /**
@@ -37,5 +41,7 @@ export function normalizeStubEvent(input: StubEventInput): IngestionEvent {
     authorRef: input.authorRef ?? "U_STUB_AUTHOR",
     body: input.body ?? "Stub event body",
     isTopLevel,
+    sourceKind: input.sourceKind,
+    participantUserIds: input.participantUserIds,
   };
 }

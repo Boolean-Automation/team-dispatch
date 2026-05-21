@@ -109,6 +109,30 @@ export async function getDueOutboxRows(db: Db): Promise<SlackOutbox[]> {
     );
 }
 
+// ── Atomic claim (P1-E) ───────────────────────────────────────────────────────
+//
+// Before calling postReply(), the worker atomically claims the row by flipping
+// it from 'pending' → 'sent' in a single UPDATE ... RETURNING. If another tick
+// already claimed the row, the UPDATE matches nothing and returns null — the
+// caller skips the send entirely, preventing a double-post.
+//
+// This replaces the old pattern of: fetch pending → send → mark sent.
+// The new pattern is: atomic claim (pending→sent) → send.
+// If send fails after the claim, the caller must call markOutboxRowFailed().
+
+export async function claimOutboxRow(
+  db: Db,
+  rowId: string
+): Promise<{ id: string } | null> {
+  const rows = await db
+    .update(slackOutbox)
+    .set({ status: "sent", sentAt: new Date() })
+    .where(and(eq(slackOutbox.id, rowId), eq(slackOutbox.status, "pending")))
+    .returning({ id: slackOutbox.id });
+
+  return rows[0] ?? null;
+}
+
 // ── Mark sent ─────────────────────────────────────────────────────────────────
 
 /**
