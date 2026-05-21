@@ -5,3 +5,18 @@
 node_modules/
 .DS_Store
 # /build runtime state
+
+# Build output + TS incremental
+dist/
+*.tsbuildinfo
+
+# Env files (never commit secrets)
+.env
+.env.local
+.env.*.local
+
+# pnpm
+.pnpm-store/
+
+# Playwright MCP artifacts
+.playwright-mcp/

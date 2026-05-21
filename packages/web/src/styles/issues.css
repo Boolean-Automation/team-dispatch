@@ -1,0 +1,174 @@
+/* dispatch — Issues Board specific styles
+   Board wrap / kanban columns / ticket cards.
+   shell.css contains the shared primitives (tokens, rail, topbar, statusbar, etc.)
+   This file adds only the Issues Board screen layout. */
+
+/* ====== BOARD LAYOUT ====== */
+.board-wrap {
+  flex: 1;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 14px 16px 0;
+}
+
+.board {
+  display: flex;
+  gap: var(--col-gap);
+  height: 100%;
+  min-width: max-content;
+  padding-bottom: 14px;
+}
+
+/* ====== KANBAN COLUMN ====== */
+.col {
+  width: var(--col-w);
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: rgba(15, 23, 42, 0.35);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  overflow: hidden;
+}
+
+.col-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(11, 17, 32, 0.4);
+  flex-shrink: 0;
+}
+
+.col-head .name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.col-head .count {
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.col-head .spacer {
+  flex: 0 1 auto;
+}
+
+.head-act {
+  color: var(--text-3);
+  padding: 3px 5px;
+  border-radius: var(--r-sm);
+  display: inline-flex;
+  align-items: center;
+}
+
+.head-act:hover {
+  color: var(--text-2);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.col-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--card-gap);
+}
+
+/* ====== TICKET CARD ====== */
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: var(--card-pad-y) var(--card-pad-x);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  cursor: pointer;
+  transition: border-color 100ms;
+}
+
+.card:hover {
+  border-color: var(--border-strong);
+}
+
+.card.focused {
+  border-color: var(--emerald);
+  box-shadow: 0 0 0 1px rgba(16, 185, 129, 0.2);
+}
+
+.card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.card-client {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.card-id {
+  font-size: 11.5px;
+  color: var(--text-3);
+  flex-shrink: 0;
+}
+
+.card-preview {
+  font-size: 13px;
+  color: var(--text-2);
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.card-foot {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+
+.card-foot .age {
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.card-foot .sla {
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.card-foot .sla.warn {
+  color: var(--amber);
+}
+
+.card-foot .sla.over {
+  color: var(--red);
+}
+
+.card-foot .sla.paused {
+  color: var(--text-3);
+  font-style: italic;
+}
+
+/* Push health pill to the right */
+.card-foot .health {
+  margin-left: auto;
+}
