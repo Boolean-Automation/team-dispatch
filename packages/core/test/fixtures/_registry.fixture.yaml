@@ -1,0 +1,32 @@
+# Test fixture — NOT the real _registry.yaml
+# Used by registry.test.ts to verify the registry builder.
+
+clients:
+  - slug: test-client-alpha
+    display_name: Test Client Alpha
+    email_domains:
+      - alpha.example.com
+    slack_channel_ids:
+      - C_ALPHA_001
+    owning_se: user_clerk_alpha
+
+  - slug: test-client-beta
+    display_name: Test Client Beta
+    email_domains:
+      - beta.example.com
+      - betapaint.com
+    slack_channel_ids:
+      - C_BETA_001
+      - C_BETA_002
+    owning_se: user_clerk_beta
+
+  - slug: test-client-no-se
+    display_name: Client With No SE
+    email_domains: []
+    slack_channel_ids:
+      - C_NOSLE_001
+    owning_se: ~
+
+internal_channel_ids:
+  - C_INTERNAL_BOOLEAN
+  - C_INTERNAL_DEV

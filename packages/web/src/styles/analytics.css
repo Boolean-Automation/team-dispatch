@@ -1,0 +1,187 @@
+/* Analytics — Workforce dashboard */
+
+.analytics {
+  display: grid;
+  grid-template-columns: var(--rail-w) 1fr;
+  height: 100vh;
+  min-width: 1240px;
+  background:
+    radial-gradient(ellipse 800px 600px at 18% 92%, rgba(16,185,129,0.05) 0%, transparent 65%),
+    var(--bg);
+}
+
+.an-body {
+  flex: 1; overflow-y: auto;
+  padding: 20px 24px 40px;
+  display: flex; flex-direction: column;
+  gap: 16px;
+}
+
+/* Date range + filters strip */
+.an-controls {
+  display: flex; align-items: center; gap: 10px;
+  flex-wrap: wrap;
+}
+.an-controls .grow { flex: 1; }
+.range {
+  display: inline-flex; align-items: center;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  overflow: hidden;
+}
+.range button {
+  padding: 5px 10px;
+  font-size: 12px;
+  color: var(--text-2);
+  border-right: 1px solid var(--border-strong);
+}
+.range button:last-child { border-right: 0; }
+.range button.on {
+  background: var(--raised);
+  color: var(--text);
+}
+.range button:hover { color: var(--text); background: var(--raised); }
+
+.range-dates {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 5px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.range-dates .lbl { color: var(--text-3); font-family: var(--font-ui); font-size: 11.5px; }
+
+/* Headline figures row */
+.headline {
+  display: flex; align-items: stretch;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  overflow: hidden;
+}
+.headline .fig {
+  flex: 1;
+  padding: 14px 18px;
+  display: flex; flex-direction: column; gap: 4px;
+  border-right: 1px solid var(--border);
+  min-width: 0;
+}
+.headline .fig:last-child { border-right: 0; }
+.headline .fig .lbl {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+.headline .fig .num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 26px;
+  color: var(--text);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+.headline .fig .unit { font-size: 14px; color: var(--text-2); margin-left: 4px; font-weight: 500; }
+.headline .fig .delta {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text-3);
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.headline .fig .delta.up    { color: #6EE7B7; }
+.headline .fig .delta.down  { color: #FCA5A5; }
+.headline .fig .delta.flat  { color: var(--text-3); }
+.headline .fig .delta .arrow { display: inline-block; }
+.headline .fig.accent .num { color: var(--emerald); }
+
+/* Charts grid */
+.an-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+.chart-card {
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  padding: 14px 16px 16px;
+  display: flex; flex-direction: column; gap: 10px;
+}
+.chart-head {
+  display: flex; align-items: baseline; gap: 10px;
+}
+.chart-head .title {
+  font-size: 13.5px; font-weight: 600;
+  color: var(--text);
+}
+.chart-head .sub {
+  font-size: 11.5px; color: var(--text-3);
+}
+.chart-head .spacer { flex: 1; }
+.chart-head .legend {
+  display: inline-flex; align-items: center; gap: 12px;
+  font-size: 11px; color: var(--text-2);
+}
+.chart-head .legend .swatch {
+  display: inline-flex; align-items: center; gap: 5px;
+}
+.chart-head .legend .swatch::before {
+  content: ""; width: 9px; height: 9px; border-radius: 2px;
+  background: var(--text-3);
+}
+
+.chart-svg { width: 100%; height: auto; display: block; }
+
+.chart-foot {
+  display: flex; align-items: center; gap: 12px;
+  font-size: 11px; color: var(--text-3);
+  font-family: var(--font-mono);
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}
+.chart-foot .ok { color: var(--emerald); }
+.chart-foot .bad { color: var(--red); }
+.chart-foot .warn { color: var(--amber); }
+
+/* Inline text in chart-foot */
+.chart-foot b { color: var(--text); font-weight: 600; }
+
+/* SVG common */
+.axis-text { fill: var(--text-3); font-family: var(--font-mono); font-size: 10px; }
+.axis-line { stroke: var(--border); stroke-width: 1; }
+.grid-line { stroke: var(--border); stroke-width: 1; stroke-dasharray: 2 3; }
+.bar-label { fill: var(--text); font-family: var(--font-mono); font-size: 10.5px; font-weight: 500; }
+.eng-label { fill: var(--text-2); font-family: var(--font-ui); font-size: 11.5px; font-weight: 500; }
+.target-line { stroke: var(--amber); stroke-width: 1; stroke-dasharray: 4 3; }
+.target-label { fill: var(--amber); font-family: var(--font-mono); font-size: 10px; }
+
+/* Tooltip */
+.chart-tip {
+  position: absolute;
+  background: var(--raised);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  padding: 6px 8px;
+  font-size: 11.5px;
+  color: var(--text);
+  pointer-events: none;
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+  z-index: 50;
+}
+
+/* Bar (used in queue / single-metric charts) */
+.bar-rect { fill: var(--emerald); }
+.bar-rect.slack { fill: #A855F7; }
+.bar-rect.gmail { fill: #F472B6; }
+.bar-rect.dim   { fill: var(--text-3); }
+.bar-rect.warn  { fill: var(--amber); }
+
+/* Drill-in title with sub */
+.chart-head .title .em { color: var(--emerald); }
