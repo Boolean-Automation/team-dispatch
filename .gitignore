@@ -1,0 +1,6 @@
+# /build + Ship runtime state
+.ship/
+.build-runs/*/
+!.build-runs/.gitkeep
+node_modules/
+.DS_Store
