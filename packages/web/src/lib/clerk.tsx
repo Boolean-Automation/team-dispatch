@@ -117,7 +117,11 @@ export function useDispatchUser(): DispatchUser | null {
   // If no publishable key, return null — the rail footer will fall back to seed
   if (!PUBLISHABLE_KEY) return null;
 
-  // eslint-disable-next-line react-hooks/rules-of-hooks
+  // useUser() is intentionally called after the PUBLISHABLE_KEY guard: when no
+  // key is set, ClerkProvider is not mounted and useUser() would throw.
+  // PUBLISHABLE_KEY is a build-time constant, so the hook order is stable for
+  // any given build. Revisit (mount the provider unconditionally) if/when
+  // react-hooks lint is added to the project.
   const { isLoaded, isSignedIn, user } = useUser();
 
   if (!isLoaded || !isSignedIn || !user) return null;
