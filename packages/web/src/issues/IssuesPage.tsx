@@ -1,25 +1,20 @@
 // dispatch — IssuesPage (the main kanban board route: /)
-// Slice 1: reads from seed data via a TanStack Query query with refetchInterval.
-// Slice 3: swaps queryFn to GET /api/tickets — no other change needed.
 //
-// Live-update strategy (plan §Slice 1):
-//   refetchInterval: 25_000 (25s) — adequate for 2-person pilot, no websockets.
-//   The status-bar lastSync label is wired to dataUpdatedAt (the real fetch time).
+// Slice 3: reads from the live GET /api/tickets via TanStack Query.
+//   - queryFn replaced with fetch("/api/tickets") — no other structural change.
+//   - refetchInterval: 25_000 (25s live-update polling, plan §Slice 1).
+//   - dataUpdatedAt from TanStack Query drives the status-bar "last sync" label.
+//
+// The seed.ts array is now a test/dev fixture only (not imported here).
 
 import React, { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
 import { Rail } from "../shell/Rail";
 import { Topbar } from "../shell/Topbar";
 import { StatusBar } from "../shell/StatusBar";
-import { Board, STATUSES } from "./Board";
-import { SEED_TICKETS, SIGNED_IN_KEY } from "../lib/seed";
-import type { BoardFilters, SortMode, Ticket } from "../lib/types";
-
-// Slice 1 query function — returns seed data immediately.
-// Slice 3 replaces this with: fetch("/api/tickets").then(r => r.json())
-async function fetchTickets(): Promise<Ticket[]> {
-  return SEED_TICKETS;
-}
+import { Board } from "./Board";
+import { useTickets } from "../lib/queries";
+import { useDispatchUser } from "../lib/clerk";
+import type { BoardFilters, SortMode } from "../lib/types";
 
 export function IssuesPage() {
   const [filters, setFilters] = useState<BoardFilters>({
@@ -30,29 +25,47 @@ export function IssuesPage() {
   const [sort, setSort] = useState<SortMode>("sla");
   const [focusedId, setFocusedId] = useState<string | null>(null);
 
+  const dispatchUser = useDispatchUser();
+
+  // Build API query params from filter state
+  const queryParams = {
+    ...(filters.assignee !== "all"
+      ? { assignee: filters.assignee }
+      : {}),
+    ...(filters.type !== "all" ? { type: filters.type } : {}),
+    sort,
+  };
+
   // TanStack Query — polls every 25s. dataUpdatedAt drives the status bar.
-  const { data: tickets = [], dataUpdatedAt } = useQuery<Ticket[]>({
-    queryKey: ["tickets"],
-    queryFn: fetchTickets,
-    refetchInterval: 25_000,
-    staleTime: 20_000,
-  });
+  const { data: tickets = [], dataUpdatedAt } = useTickets(queryParams);
+
+  // Client-side filter by account (accountId from "client" filter)
+  const visibleTickets =
+    filters.client === "all"
+      ? tickets
+      : tickets.filter((t) => t.accountId === filters.client);
 
   // Compute view counts for the rail
-  const onYouCount = tickets.filter((t) => t.assignee === SIGNED_IN_KEY).length;
-  const unassignedCount = tickets.filter((t) => !t.assignee).length;
+  const myUserId = dispatchUser?.userId;
+  const onYouCount = myUserId
+    ? visibleTickets.filter((t) => t.assignee === myUserId).length
+    : 0;
+  const unassignedCount = visibleTickets.filter((t) => !t.assignee).length;
+
   const viewCounts = {
     all: tickets.length,
     unassigned: unassignedCount,
     mine: onYouCount,
-    accounts: 28,
-    closed: 412,
+    accounts: 0, // populated by Slice 4+ with real account data
+    closed: 0,
   };
 
-  // "On you" count for the status bar (after any board filter)
-  const onYouInView = tickets.filter(
-    (t) => t.status === "on-you" && t.assignee === SIGNED_IN_KEY
-  ).length;
+  // "On you" tickets in view (for status bar)
+  const onYouInView = myUserId
+    ? visibleTickets.filter(
+        (t) => t.status === "on-you" && t.assignee === myUserId
+      ).length
+    : 0;
 
   return (
     <div className="app">
@@ -66,14 +79,14 @@ export function IssuesPage() {
           viewLabel="All issues"
         />
         <Board
-          tickets={tickets}
+          tickets={visibleTickets}
           filters={filters}
           sort={sort}
           focusedId={focusedId}
           onFocus={setFocusedId}
         />
         <StatusBar
-          totalCount={tickets.length}
+          totalCount={visibleTickets.length}
           onYouCount={onYouInView}
           unassignedCount={unassignedCount}
           dataUpdatedAt={dataUpdatedAt}

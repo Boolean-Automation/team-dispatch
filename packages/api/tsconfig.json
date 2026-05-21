@@ -12,5 +12,9 @@
     "tsBuildInfoFile": "./.tsbuildinfo"
   },
   "include": ["src"],
-  "exclude": ["test", "dist"]
+  "exclude": ["test", "dist"],
+  "references": [
+    { "path": "../core" },
+    { "path": "../db" }
+  ]
 }

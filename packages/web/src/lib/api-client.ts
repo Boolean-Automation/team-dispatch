@@ -18,6 +18,14 @@ export interface MeResponse {
   role: ApiRole;
 }
 
+// ── Token storage (set by clerk.tsx after sign-in) ───────────────────────────
+
+let _tokenProvider: TokenProvider | null = null;
+
+export function setTokenProvider(fn: TokenProvider): void {
+  _tokenProvider = fn;
+}
+
 // ── Internal fetch wrapper ─────────────────────────────────────────────────────
 
 async function apiFetch<T>(
@@ -30,8 +38,9 @@ async function apiFetch<T>(
     ...(options.headers as Record<string, string> | undefined),
   };
 
-  if (getToken) {
-    const token = await getToken();
+  const provider = getToken ?? _tokenProvider;
+  if (provider) {
+    const token = await provider();
     if (token) {
       headers["Authorization"] = `Bearer ${token}`;
     }
@@ -75,9 +84,23 @@ export function createApiClient(getToken?: TokenProvider) {
     getHealth(): Promise<{ ok: boolean }> {
       return apiFetch<{ ok: boolean }>("/api/health");
     },
+
+    /** Generic GET — used by TanStack Query hooks in queries.ts */
+    get<T>(path: string): Promise<T> {
+      return apiFetch<T>(path, {}, getToken);
+    },
   };
 }
 
-// Singleton client for use in hooks that provide their own token getter.
-// Slice 3 will extend this with ticket / account methods.
+// ── Singleton api client ───────────────────────────────────────────────────────
+//
+// Used by queries.ts — automatically picks up the token from _tokenProvider
+// which is set by clerk.tsx after sign-in.
+
+export const apiClient = {
+  get<T>(path: string): Promise<T> {
+    return apiFetch<T>(path);
+  },
+};
+
 export type ApiClient = ReturnType<typeof createApiClient>;
