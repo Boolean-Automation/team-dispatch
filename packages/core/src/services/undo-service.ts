@@ -9,7 +9,8 @@
 import { eq, and, isNull } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import type { Db } from "@dispatch/db";
-import { tickets, auditLog } from "@dispatch/db";
+import { tickets, auditLog, messages } from "@dispatch/db";
+import { cancelOutboxRow } from "./outbox-service.js";
 
 export function generateUndoToken(): string {
   return randomUUID();
@@ -95,6 +96,39 @@ export async function undoByToken(db: Db, token: string): Promise<UndoResult> {
       .set({ assignee: prevAssignee, updatedAt: new Date() })
       .where(eq(tickets.id, entry.ticketId));
     action = "ticket.assigned";
+  } else if (event === "message.created") {
+    // Undo reply send: cancel the outbox row (if within window) + soft-delete
+    // the outbound Message + revert ticket status if it was resolved.
+    const after = entry.after as {
+      messageId?: string;
+      resolvedTicket?: boolean;
+    } | null;
+    const before = entry.before as { status?: string } | null;
+
+    if (!after?.messageId) return { ok: false, reason: "not-undoable" };
+
+    // Cancel the outbox row — if already past the window (sent), we still
+    // soft-delete the dispatch-side record (the plan's OQ-4 resolution).
+    await cancelOutboxRow(db, after.messageId);
+
+    // Soft-delete the outbound Message by removing it
+    await db
+      .delete(messages)
+      .where(eq(messages.id, after.messageId));
+
+    // Revert ticket status if the send also resolved the ticket
+    if (after.resolvedTicket && entry.ticketId && before?.status) {
+      await db
+        .update(tickets)
+        .set({
+          status: before.status as typeof tickets.$inferInsert["status"],
+          resolvedAt: null,
+          updatedAt: new Date(),
+        })
+        .where(eq(tickets.id, entry.ticketId));
+    }
+
+    action = "message.created";
   } else {
     return { ok: false, reason: "not-undoable" };
   }

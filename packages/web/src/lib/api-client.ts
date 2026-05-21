@@ -101,6 +101,18 @@ export const apiClient = {
   get<T>(path: string): Promise<T> {
     return apiFetch<T>(path);
   },
+  post<T>(path: string, body: unknown): Promise<T> {
+    return apiFetch<T>(path, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  },
+  patch<T>(path: string, body: unknown): Promise<T> {
+    return apiFetch<T>(path, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    });
+  },
 };
 
 export type ApiClient = ReturnType<typeof createApiClient>;

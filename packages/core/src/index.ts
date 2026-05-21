@@ -17,6 +17,8 @@ export * from "./services/contact-discovery.js";
 export * from "./services/contact-service.js";
 export * from "./services/message-service.js";
 export * from "./services/notification-service.js";
+export * from "./services/outbox-service.js";
+export * from "./services/reply-service.js";
 export * from "./services/routing.js";
 export * from "./services/ticket-service.js";
 export * from "./services/undo-service.js";
@@ -26,6 +28,9 @@ export * from "./ingestion/types.js";
 export * from "./ingestion/ingest-message.js";
 export * from "./ingestion/adapters/slack-webhook.js";
 export * from "./ingestion/adapters/stub-feeder.js";
+
+// ── Slack write-back ──────────────────────────────────────────────────────────
+export * from "./slack/write-back.js";
 
 // ── Registry ──────────────────────────────────────────────────────────────────
 export * from "./registry/build-registry.js";

@@ -60,6 +60,8 @@ export interface Ticket {
   assignee: string | null; // Clerk user id or null (unassigned)
   effortBucket: EffortBucket;
   sourceKind: SourceKind;
+  sourceChannelId?: string | null;
+  sourceEventTs?: string | null;
   originClass: OriginClass;
   preview: string; // message excerpt, first 160 chars
   ageMin: number; // minutes since opened_at
@@ -79,6 +81,33 @@ export interface BoardFilters {
   client: string; // "all" or account id
   assignee: string; // "all", "unassigned", or Clerk user id
   type: string; // "all" or TicketType
+}
+
+// ── Message ───────────────────────────────────────────────────────────────────
+
+export interface Message {
+  id: string;
+  ticketId: string;
+  direction: "inbound" | "outbound";
+  authorKind: "client" | "se";
+  authorRef: string;
+  body: string;
+  slackTs?: string | null;
+  postedAt: string;
+  createdAt: string;
+}
+
+// ── Activity ──────────────────────────────────────────────────────────────────
+
+export interface ActivityEntry {
+  id: string;
+  event: string;
+  actorId?: string | null;
+  ticketId?: string | null;
+  before?: Record<string, unknown> | null;
+  after?: Record<string, unknown> | null;
+  undoToken?: string | null;
+  createdAt: string;
 }
 
 // ── View counts for the rail ──────────────────────────────────────────────────

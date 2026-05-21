@@ -7,6 +7,7 @@
 // Slice 2 wires: error-handler, clerk-auth plugin, GET /api/me.
 // Slice 3 wires: db plugin, tickets/accounts/contacts read routes.
 // Slice 4 wires: raw-body plugin, ingestion/undo/notifications/activity routes.
+// Slice 5 wires: messages route, accounts highlights endpoint, outbox worker.
 
 import Fastify from "fastify";
 import errorHandlerPlugin from "./plugins/error-handler.js";
@@ -21,6 +22,8 @@ import ingestionRoutes from "./routes/ingestion.js";
 import undoRoutes from "./routes/undo.js";
 import notificationRoutes from "./routes/notifications.js";
 import activityRoutes from "./routes/activity.js";
+import messageRoutes from "./routes/messages.js";
+import { startOutboxWorker } from "./jobs/outbox-worker.js";
 import type { Db } from "@dispatch/db";
 
 const PORT = Number(process.env.PORT ?? 3000);
@@ -55,6 +58,8 @@ export async function buildServer(opts: BuildServerOptions = {}) {
   await fastify.register(undoRoutes);
   await fastify.register(notificationRoutes);
   await fastify.register(activityRoutes);
+  // Slice 5 routes
+  await fastify.register(messageRoutes);
 
   // ── Health check ─────────────────────────────────────────────────────────────
   fastify.get("/health", async () => ({ ok: true }));
@@ -72,4 +77,8 @@ if (isMain) {
   const server = await buildServer();
   await server.listen({ port: PORT, host: HOST });
   server.log.info(`dispatch api listening on ${HOST}:${PORT}`);
+
+  // Start the outbox worker after the server is listening.
+  // Only in the main process — not in tests (tests don't call buildServer from isMain).
+  startOutboxWorker(server.db);
 }

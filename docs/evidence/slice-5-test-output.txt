@@ -1,0 +1,57 @@
+
+> @dispatch/core@0.0.0 test /Users/cody/boolean-knowledge/builds/team-dispatch/packages/core
+> vitest run
+
+
+ RUN  v2.1.9 /Users/cody/boolean-knowledge/builds/team-dispatch/packages/core
+
+stderr | test/orphan-reply.test.ts > orphan-reply handling (FIX 7) > does not crash when a reply arrives before its parent
+[dispatch] orphan-reply: no parent ticket found for channel=C_ORPHAN_TEST_001 threadTs=1779368010387.missing_parent_001 eventTs=1779368010387.orphan_reply_001
+
+stderr | test/orphan-reply.test.ts > orphan-reply handling (FIX 7) > does not crash when a reply arrives before its parent
+[dispatch] orphan-reply: no parent ticket found for channel=C_ORPHAN_TEST_001 threadTs=1779368010387.missing_parent_001 eventTs=1779368010387.orphan_reply_001
+
+stderr | test/orphan-reply.test.ts > orphan-reply handling (FIX 7) > returns orphan-reply kind (not ignored or error)
+[dispatch] orphan-reply: no parent ticket found for channel=C_ORPHAN_TEST_001 threadTs=1779368010400.missing_parent_002 eventTs=1779368010400.orphan_reply_002
+
+stderr | test/orphan-reply.test.ts > orphan-reply handling (FIX 7) > does not fabricate a parent Ticket
+[dispatch] orphan-reply: no parent ticket found for channel=C_ORPHAN_TEST_001 threadTs=1779368010401.missing_parent_003 eventTs=1779368010401.orphan_reply_003
+
+stderr | test/orphan-reply.test.ts > orphan-reply handling (FIX 7) > does not silently drop the orphan reply — kind is orphan-reply with channel info
+[dispatch] orphan-reply: no parent ticket found for channel=C_ORPHAN_TEST_001 threadTs=1779368010405.missing_parent_004 eventTs=1779368010405.orphan_reply_004
+
+ ✓ test/contact-discovery.test.ts (6 tests) 62ms
+ ✓ test/orphan-reply.test.ts (4 tests) 59ms
+ ✓ test/account-resolution.test.ts (3 tests) 85ms
+ ✓ test/undo-service.test.ts (5 tests) 102ms
+ ✓ test/reply-service.test.ts (6 tests) 116ms
+ ✓ test/idempotency.test.ts (3 tests) 111ms
+ ✓ test/ingest-message.test.ts (6 tests) 128ms
+ ✓ test/outbox-service.test.ts (10 tests) 159ms
+ ✓ test/ticket-service.test.ts (6 tests) 198ms
+ ✓ test/registry.test.ts (10 tests) 4ms
+ ✓ test/routing.test.ts (2 tests) 31ms
+
+ Test Files  11 passed (11)
+      Tests  61 passed (61)
+   Start at  05:53:29
+   Duration  1.20s (transform 243ms, setup 0ms, collect 4.46s, tests 1.06s, environment 1ms, prepare 639ms)
+
+
+> @dispatch/api@0.0.0 test /Users/cody/boolean-knowledge/builds/team-dispatch/packages/api
+> vitest run
+
+
+ RUN  v2.1.9 /Users/cody/boolean-knowledge/builds/team-dispatch/packages/api
+
+Sourcemap for "/Users/cody/boolean-knowledge/builds/team-dispatch/node_modules/.pnpm/node-cron@4.2.1/node_modules/node-cron/dist/esm/node-cron.js" points to missing source files
+ ✓ test/clerk-auth.test.ts (8 tests) 35ms
+ ✓ test/ingestion.test.ts (9 tests) 56ms
+ ✓ test/messages.test.ts (9 tests) 72ms
+ ✓ test/tickets.test.ts (6 tests) 83ms
+
+ Test Files  4 passed (4)
+      Tests  32 passed (32)
+   Start at  05:53:31
+   Duration  618ms (transform 125ms, setup 0ms, collect 1.18s, tests 247ms, environment 0ms, prepare 149ms)
+
