@@ -13,6 +13,7 @@ import { createDb } from "../src/client.js";
 import { accounts } from "../src/schema.js";
 import { buildRegistry } from "../../core/src/registry/build-registry.js";
 import { UNROUTED_ACCOUNT_SLUG } from "../../core/src/services/contact-discovery.js";
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -21,12 +22,26 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATABASE_URL =
   process.env.DATABASE_URL ?? "postgresql://cody@localhost:5432/dispatch_dev";
 
+// Default resolves to ~/boolean-knowledge/clients/_registry.yaml when the
+// repo lives at the canonical ~/boolean-knowledge/builds/team-dispatch path
+// (5 levels up from packages/db/seed/ lands in boolean-knowledge/). When
+// team-dispatch is checked out elsewhere, set REGISTRY_PATH explicitly —
+// the error below tells you so.
 const REGISTRY_PATH =
   process.env.REGISTRY_PATH ??
-  path.resolve(__dirname, "../../../../clients/_registry.yaml");
+  path.resolve(__dirname, "../../../../../clients/_registry.yaml");
 
 async function main() {
   const db = createDb(DATABASE_URL);
+
+  if (!fs.existsSync(REGISTRY_PATH)) {
+    console.error(`Seed: registry file not found at ${REGISTRY_PATH}`);
+    console.error(
+      "Set REGISTRY_PATH to the absolute path of boolean-knowledge/clients/_registry.yaml,"
+    );
+    console.error("e.g. REGISTRY_PATH=~/boolean-knowledge/clients/_registry.yaml pnpm --filter @dispatch/db seed");
+    process.exit(1);
+  }
 
   console.log("Loading registry from:", REGISTRY_PATH);
   const entries = buildRegistry(REGISTRY_PATH);
