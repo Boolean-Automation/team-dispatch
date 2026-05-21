@@ -1,0 +1,105 @@
+=== pnpm --filter @dispatch/core build ===
+
+> @dispatch/core@0.0.0 build /Users/cody/boolean-knowledge/builds/team-dispatch/packages/core
+> tsc -b
+
+
+=== pnpm typecheck ===
+
+> dispatch@0.0.0 typecheck /Users/cody/boolean-knowledge/builds/team-dispatch
+> pnpm --filter @dispatch/db typecheck && pnpm --filter @dispatch/core typecheck && pnpm --filter @dispatch/web typecheck && pnpm --filter @dispatch/api typecheck
+
+
+> @dispatch/db@0.0.0 typecheck /Users/cody/boolean-knowledge/builds/team-dispatch/packages/db
+> tsc --noEmit
+
+
+> @dispatch/core@0.0.0 typecheck /Users/cody/boolean-knowledge/builds/team-dispatch/packages/core
+> tsc --noEmit
+
+
+> @dispatch/web@0.0.0 typecheck /Users/cody/boolean-knowledge/builds/team-dispatch/packages/web
+> tsc --noEmit
+
+
+> @dispatch/api@0.0.0 typecheck /Users/cody/boolean-knowledge/builds/team-dispatch/packages/api
+> tsc --noEmit
+
+
+=== pnpm lint ===
+
+> dispatch@0.0.0 lint /Users/cody/boolean-knowledge/builds/team-dispatch
+> eslint .
+
+
+=== pnpm --filter @dispatch/core test ===
+
+> @dispatch/core@0.0.0 test /Users/cody/boolean-knowledge/builds/team-dispatch/packages/core
+> vitest run
+
+
+ RUN  v2.1.9 /Users/cody/boolean-knowledge/builds/team-dispatch/packages/core
+
+ ✓ test/status-ladder.test.ts (44 tests) 5ms
+ ✓ test/sla-clock.test.ts (40 tests) 40ms
+ ✓ test/contact-discovery.test.ts (6 tests) 83ms
+ ✓ test/account-resolution.test.ts (3 tests) 114ms
+ ✓ test/reply-service.test.ts (6 tests) 174ms
+ ✓ test/idempotency.test.ts (3 tests) 110ms
+ ✓ test/ingest-message.test.ts (6 tests) 159ms
+ ✓ test/outbox-service.test.ts (12 tests) 179ms
+ ✓ test/dm-resolution.test.ts (7 tests) 165ms
+stderr | test/orphan-reply.test.ts > orphan-reply handling (FIX 7) > does not crash when a reply arrives before its parent
+[dispatch] orphan-reply: no parent ticket found for channel=C_ORPHAN_TEST_001 threadTs=1779371202472.missing_parent_001 eventTs=1779371202472.orphan_reply_001
+
+stderr | test/orphan-reply.test.ts > orphan-reply handling (FIX 7) > does not crash when a reply arrives before its parent
+[dispatch] orphan-reply: no parent ticket found for channel=C_ORPHAN_TEST_001 threadTs=1779371202472.missing_parent_001 eventTs=1779371202472.orphan_reply_001
+
+stderr | test/orphan-reply.test.ts > orphan-reply handling (FIX 7) > returns orphan-reply kind (not ignored or error)
+[dispatch] orphan-reply: no parent ticket found for channel=C_ORPHAN_TEST_001 threadTs=1779371202492.missing_parent_002 eventTs=1779371202492.orphan_reply_002
+
+stderr | test/orphan-reply.test.ts > orphan-reply handling (FIX 7) > does not fabricate a parent Ticket
+[dispatch] orphan-reply: no parent ticket found for channel=C_ORPHAN_TEST_001 threadTs=1779371202494.missing_parent_003 eventTs=1779371202494.orphan_reply_003
+
+stderr | test/orphan-reply.test.ts > orphan-reply handling (FIX 7) > does not silently drop the orphan reply — kind is orphan-reply with channel info
+[dispatch] orphan-reply: no parent ticket found for channel=C_ORPHAN_TEST_001 threadTs=1779371202502.missing_parent_004 eventTs=1779371202502.orphan_reply_004
+
+ ✓ test/orphan-reply.test.ts (4 tests) 69ms
+ ✓ test/undo-service.test.ts (5 tests) 145ms
+ ✓ test/registry.test.ts (10 tests) 3ms
+ ✓ test/write-back.test.ts (6 tests) 5ms
+ ✓ test/routing.test.ts (2 tests) 31ms
+ ✓ test/ticket-service.test.ts (6 tests) 97ms
+
+ Test Files  15 passed (15)
+      Tests  160 passed (160)
+   Start at  06:46:41
+   Duration  1.37s (transform 397ms, setup 0ms, collect 4.25s, tests 1.38s, environment 1ms, prepare 1.01s)
+
+
+=== pnpm --filter @dispatch/api test ===
+
+> @dispatch/api@0.0.0 test /Users/cody/boolean-knowledge/builds/team-dispatch/packages/api
+> vitest run
+
+
+ RUN  v2.1.9 /Users/cody/boolean-knowledge/builds/team-dispatch/packages/api
+
+Sourcemap for "/Users/cody/boolean-knowledge/builds/team-dispatch/node_modules/.pnpm/node-cron@4.2.1/node_modules/node-cron/dist/esm/node-cron.js" points to missing source files
+ ✓ test/clerk-auth.test.ts (8 tests) 43ms
+ ✓ test/ingestion.test.ts (9 tests) 54ms
+ ✓ test/messages.test.ts (9 tests) 85ms
+ ✓ test/tickets.test.ts (7 tests) 106ms
+stdout | test/status-ladder.test.ts > SLA timer advance 1: waiting-client → follow-up-required (A18) > runSlaAdvances advances a waiting-client ticket past 2 business days
+[sla-timer] waiting-client → follow-up-required: ticket 6649a91d-e5fa-4a82-9e7e-05a570516e1f
+
+stdout | test/status-ladder.test.ts > SLA timer advance 2: follow-up-1-sent → closeout (A18, 3bd from followUp1SentAt) > runSlaAdvances advances a follow-up-1-sent ticket past 3 business days from followUp1SentAt
+[sla-timer] follow-up-1-sent → closeout: ticket 6649a91d-e5fa-4a82-9e7e-05a570516e1f
+
+ ✓ test/status-ladder.test.ts (14 tests) 143ms
+
+ Test Files  5 passed (5)
+      Tests  47 passed (47)
+   Start at  06:46:43
+   Duration  781ms (transform 163ms, setup 0ms, collect 1.93s, tests 432ms, environment 1ms, prepare 283ms)
+

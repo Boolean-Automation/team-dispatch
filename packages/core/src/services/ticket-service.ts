@@ -1,12 +1,17 @@
-// dispatch — ticket-service: read-side service
+// dispatch — ticket-service: read-side + status-mutation service
 //
 // All Ticket reads go through here. Joins accounts for board card shapes.
 // Slice 3: list (with filter/sort) + get.
+// Slice 6: updateTicketStatus — PATCH /api/tickets/:id/status, undoable, audited.
 
 import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
 import type { Db } from "@dispatch/db";
 import { accounts, messages, tickets } from "@dispatch/db";
 import type { TicketCard, TicketDto, TicketListQuery } from "../entities/ticket.js";
+import type { TicketStatus } from "../entities/ticket.js";
+import { validateTransition } from "./status-ladder.js";
+import { appendAudit } from "./audit-service.js";
+import { generateUndoToken } from "./undo-service.js";
 
 function toDto(row: typeof tickets.$inferSelect): TicketDto {
   return {
@@ -27,6 +32,7 @@ function toDto(row: typeof tickets.$inferSelect): TicketDto {
     resolvedAt: row.resolvedAt?.toISOString() ?? null,
     slaDeadline: row.slaDeadline?.toISOString() ?? null,
     slaPaused: row.slaPaused,
+    waitingClientSinceAt: row.waitingClientSinceAt?.toISOString() ?? null,
     dismissedAt: row.dismissedAt?.toISOString() ?? null,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
@@ -166,4 +172,135 @@ export async function getTicketByDisplayId(
     .where(eq(tickets.displayId, displayId))
     .limit(1);
   return rows[0] ? toDto(rows[0]) : null;
+}
+
+// ── updateTicketStatus ─────────────────────────────────────────────────────────
+//
+// PATCH /api/tickets/:id/status — manually change ticket status.
+// Validates the transition via status-ladder rules, records resolved_at when
+// moving to 'closed' or 'complete', and returns an undo token (A25).
+// plan §Slice 6
+
+export interface UpdateTicketStatusResult {
+  ok: boolean;
+  error?: string;
+  undoToken?: string;
+  previousStatus?: TicketStatus;
+  newStatus?: TicketStatus;
+}
+
+export async function updateTicketStatus(
+  db: Db,
+  ticketId: string,
+  targetStatus: TicketStatus,
+  actorId: string
+): Promise<UpdateTicketStatusResult> {
+  // Fetch current ticket — include all SLA side-effect columns so we can
+  // record their before values in the audit log (P2-B: undo needs to restore them)
+  const rows = await db
+    .select({
+      id: tickets.id,
+      status: tickets.status,
+      effortBucket: tickets.effortBucket,
+      waitingClientSinceAt: tickets.waitingClientSinceAt,
+      followUp1SentAt: tickets.followUp1SentAt,
+      resolvedAt: tickets.resolvedAt,
+    })
+    .from(tickets)
+    .where(eq(tickets.id, ticketId))
+    .limit(1);
+
+  if (rows.length === 0) {
+    return { ok: false, error: `Ticket ${ticketId} not found` };
+  }
+
+  const ticket = rows[0]!;
+  const fromStatus = ticket.status;
+
+  // Validate via the status ladder
+  const validation = validateTransition(fromStatus, targetStatus, "manual");
+  if (!validation.ok) {
+    return { ok: false, error: validation.error };
+  }
+
+  // Block 'closed' / 'complete' without an effort bucket (spec §3.4, A7)
+  if (
+    (targetStatus === "closed" || targetStatus === "complete") &&
+    !ticket.effortBucket
+  ) {
+    return {
+      ok: false,
+      error:
+        `Cannot move ticket to '${targetStatus}' without setting an effort bucket first.`,
+    };
+  }
+
+  const undoToken = generateUndoToken();
+
+  // Stamp resolved_at when closing or completing
+  const resolvedAt =
+    targetStatus === "closed" || targetStatus === "complete" ? new Date() : undefined;
+
+  // P2-H: stamp follow_up_1_sent_at when manually entering follow-up-1-sent
+  // (only if not already set — avoids overwriting an earlier stamp)
+  let followUp1SentAt: Date | undefined;
+  if (targetStatus === "follow-up-1-sent") {
+    const existing = await db
+      .select({ followUp1SentAt: tickets.followUp1SentAt })
+      .from(tickets)
+      .where(eq(tickets.id, ticketId))
+      .limit(1);
+    if (!existing[0]?.followUp1SentAt) {
+      followUp1SentAt = new Date();
+    }
+  }
+
+  // P2-3: stamp/clear waiting_client_since_at on manual status transitions.
+  let waitingClientSinceAt: Date | null | undefined;
+  if (targetStatus === "waiting-client") {
+    waitingClientSinceAt = new Date(); // entering — stamp it
+  } else if (ticket.status === "waiting-client") {
+    waitingClientSinceAt = null; // leaving — clear it
+  }
+
+  await db
+    .update(tickets)
+    .set({
+      status: targetStatus,
+      updatedAt: new Date(),
+      ...(resolvedAt ? { resolvedAt } : {}),
+      ...(followUp1SentAt ? { followUp1SentAt } : {}),
+      ...(waitingClientSinceAt !== undefined ? { waitingClientSinceAt } : {}),
+    })
+    .where(eq(tickets.id, ticketId));
+
+  // Audit log — include SLA side-effect columns in before/after so the undo
+  // handler can restore them atomically (P2-B).
+  await appendAudit(db, {
+    ticketId,
+    actorId,
+    event: "ticket.status_changed",
+    before: {
+      status: fromStatus,
+      waitingClientSinceAt: ticket.waitingClientSinceAt?.toISOString() ?? null,
+      followUp1SentAt: ticket.followUp1SentAt?.toISOString() ?? null,
+      resolvedAt: ticket.resolvedAt?.toISOString() ?? null,
+    },
+    after: {
+      status: targetStatus,
+      waitingClientSinceAt: waitingClientSinceAt instanceof Date
+        ? waitingClientSinceAt.toISOString()
+        : (waitingClientSinceAt === null ? null : undefined),
+      followUp1SentAt: followUp1SentAt?.toISOString() ?? null,
+      resolvedAt: resolvedAt?.toISOString() ?? null,
+    },
+    undoToken,
+  });
+
+  return {
+    ok: true,
+    undoToken,
+    previousStatus: fromStatus,
+    newStatus: targetStatus,
+  };
 }

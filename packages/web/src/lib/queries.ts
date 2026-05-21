@@ -8,7 +8,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { apiClient } from "./api-client.js";
-import type { Ticket, Account } from "./types.js";
+import type { Ticket, Account, Message, ActivityEntry } from "./types.js";
 
 // ── tickets ───────────────────────────────────────────────────────────────────
 
@@ -51,6 +51,12 @@ export function useTicket(id: string) {
     queryFn: () => apiClient.get<Ticket>(`/api/tickets/${id}`),
     enabled: Boolean(id),
     staleTime: 10_000,
+    // Don't retry on client errors (4xx) — fail fast for fixture fallback in dev
+    retry: (failureCount, error) => {
+      const statusCode = (error as Error & { statusCode?: number })?.statusCode;
+      if (statusCode && statusCode >= 400 && statusCode < 500) return false;
+      return failureCount < 1; // max 1 retry on other errors
+    },
   });
 }
 
@@ -70,5 +76,30 @@ export function useAccount(id: string) {
     queryFn: () => apiClient.get<Account>(`/api/accounts/${id}`),
     enabled: Boolean(id),
     staleTime: 60_000,
+  });
+}
+
+// ── messages ──────────────────────────────────────────────────────────────────
+
+export function useMessages(ticketId: string) {
+  return useQuery<Message[]>({
+    queryKey: ["messages", ticketId],
+    queryFn: () =>
+      apiClient.get<Message[]>(`/api/tickets/${ticketId}/messages`),
+    enabled: Boolean(ticketId),
+    refetchInterval: 25_000,
+    staleTime: 10_000,
+  });
+}
+
+// ── activity ──────────────────────────────────────────────────────────────────
+
+export function useTicketActivity(ticketId: string) {
+  return useQuery<ActivityEntry[]>({
+    queryKey: ["activity", ticketId],
+    queryFn: () =>
+      apiClient.get<ActivityEntry[]>(`/api/tickets/${ticketId}/activity`),
+    enabled: Boolean(ticketId),
+    staleTime: 15_000,
   });
 }

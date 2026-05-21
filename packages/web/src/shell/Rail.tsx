@@ -1,6 +1,7 @@
 // dispatch — Rail (left sidebar) component
 // Ported from shell.jsx Rail function.
 // Slice 2: rail footer reads the live Clerk user; falls back to seed SIGNED_IN_KEY.
+// Slice 7: Shared Issues saved view added (reinforcement collaborators, A27).
 
 import React from "react";
 import { Link } from "react-router-dom";
@@ -98,6 +99,14 @@ export function Rail({ current, viewCounts = {} }: RailProps) {
                 <span className="count mono">{v.count}</span>
               </button>
             ))}
+            {/* Slice 7: Shared Issues — tickets where I am a reinforcement collaborator (A27) */}
+            <button className="nav-item indent" title="Tickets you're reinforcing">
+              <span className="ico">
+                <Ic.bookmark />
+              </span>
+              <span className="label">Shared issues</span>
+              <span className="count mono">{counts.shared ?? 0}</span>
+            </button>
             <div className="rail-section-label" style={{ marginTop: 6 }}>
               Closed
             </div>

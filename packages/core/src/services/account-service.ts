@@ -1,12 +1,15 @@
-// dispatch — account-service: read-side service
+// dispatch — account-service
 //
-// All Account reads go through here. No business logic in routes.
-// Slice 3: list + get only.
+// All Account reads + highlights write go through here. No business logic in routes.
+// Slice 3: list + get.
+// Slice 5: updateAccountHighlights (human-curated highlights field, spec §3.3).
 
 import { eq, sql } from "drizzle-orm";
 import type { Db } from "@dispatch/db";
 import { accounts } from "@dispatch/db";
 import type { AccountDto, AccountSummary } from "../entities/account.js";
+import { appendAudit } from "./audit-service.js";
+import { generateUndoToken } from "./undo-service.js";
 
 function toDto(row: typeof accounts.$inferSelect): AccountDto {
   return {
@@ -63,6 +66,56 @@ export async function getAccountBySlug(
     .where(eq(accounts.slug, slug))
     .limit(1);
   return rows[0] ? toDto(rows[0]) : null;
+}
+
+// ── Highlights edit (Slice 5) ─────────────────────────────────────────────────
+
+export type UpdateHighlightsResult =
+  | { ok: true; account: AccountDto; undoToken: string }
+  | { ok: false };
+
+/**
+ * Update the human-curated highlights field on an Account.
+ * Returns the updated AccountDto + an undoToken.
+ * The highlights field is not stored in audit_log before/after detail — only
+ * an 'account.highlights_updated' event is logged (spec §3.3).
+ */
+export async function updateAccountHighlights(
+  db: Db,
+  accountId: string,
+  highlights: string,
+  actorId: string
+): Promise<UpdateHighlightsResult> {
+  const existing = await db
+    .select()
+    .from(accounts)
+    .where(eq(accounts.id, accountId))
+    .limit(1);
+
+  if (existing.length === 0) {
+    return { ok: false };
+  }
+
+  const prevHighlights = existing[0]!.highlights;
+
+  const updated = await db
+    .update(accounts)
+    .set({ highlights, updatedAt: new Date() })
+    .where(eq(accounts.id, accountId))
+    .returning();
+
+  const undoToken = generateUndoToken();
+
+  await appendAudit(db, {
+    ticketId: null,
+    actorId,
+    event: "account.highlights_updated",
+    before: { highlights: prevHighlights },
+    after: { highlights },
+    undoToken,
+  });
+
+  return { ok: true, account: toDto(updated[0]!), undoToken };
 }
 
 /** Find an Account by one of its registered Slack channel ids.

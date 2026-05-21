@@ -149,11 +149,49 @@ describe("GET /api/tickets/:id", () => {
     expect(res.body.status).toBe("new");
   });
 
+  it("returns 200 when fetching by DSP- display id (P1-D)", async () => {
+    // First get the ticket to learn its display id
+    const dtoRes = await request(fastify.server)
+      .get(`/api/tickets/${testTicketId}`)
+      .set("Authorization", "Bearer valid-token");
+
+    expect(dtoRes.status).toBe(200);
+    const displayId: string = dtoRes.body.displayId;
+    expect(displayId).toMatch(/^DSP-/);
+
+    // Now fetch using the display id
+    const res = await request(fastify.server)
+      .get(`/api/tickets/${displayId}`)
+      .set("Authorization", "Bearer valid-token");
+
+    expect(res.status).toBe(200);
+    expect(res.body.id).toBe(testTicketId);
+    expect(res.body.displayId).toBe(displayId);
+  });
+
   it("returns 404 for a missing ticket id", async () => {
     const res = await request(fastify.server)
       .get("/api/tickets/00000000-0000-0000-0000-000000000000")
       .set("Authorization", "Bearer valid-token");
 
     expect(res.status).toBe(404);
+  });
+
+  // P3-A: malformed id (neither UUID nor DSP-####) must return 400, not 500
+  it("returns 400 for a malformed ticket id (P3-A)", async () => {
+    const res = await request(fastify.server)
+      .get("/api/tickets/not-a-valid-id")
+      .set("Authorization", "Bearer valid-token");
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toContain("Invalid ticket id");
+  });
+
+  it("returns 400 for a partial UUID (P3-A)", async () => {
+    const res = await request(fastify.server)
+      .get("/api/tickets/00000000-0000-0000-0000")
+      .set("Authorization", "Bearer valid-token");
+
+    expect(res.status).toBe(400);
   });
 });

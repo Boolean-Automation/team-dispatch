@@ -1,0 +1,38 @@
+
+> @dispatch/core@0.0.0 test /Users/cody/boolean-knowledge/builds/team-dispatch/packages/core
+> vitest run
+
+
+ RUN  v2.1.9 /Users/cody/boolean-knowledge/builds/team-dispatch/packages/core
+
+ ✓ test/registry.test.ts (10 tests) 8ms
+ ✓ test/contact-discovery.test.ts (6 tests) 57ms
+ ✓ test/routing.test.ts (2 tests) 60ms
+ ✓ test/orphan-reply.test.ts (4 tests) 64ms
+ ✓ test/undo-service.test.ts (5 tests) 84ms
+ ✓ test/account-resolution.test.ts (3 tests) 73ms
+ ✓ test/idempotency.test.ts (3 tests) 101ms
+ ✓ test/ingest-message.test.ts (6 tests) 116ms
+ ✓ test/ticket-service.test.ts (6 tests) 166ms
+
+ Test Files  9 passed (9)
+      Tests  45 passed (45)
+   Start at  05:35:58
+   Duration  968ms (transform 302ms, setup 0ms, collect 4.36s, tests 728ms, environment 1ms, prepare 592ms)
+
+
+> @dispatch/api@0.0.0 test /Users/cody/boolean-knowledge/builds/team-dispatch/packages/api
+> vitest run
+
+
+ RUN  v2.1.9 /Users/cody/boolean-knowledge/builds/team-dispatch/packages/api
+
+ ✓ test/clerk-auth.test.ts (8 tests) 35ms
+ ✓ test/ingestion.test.ts (9 tests) 52ms
+ ✓ test/tickets.test.ts (6 tests) 74ms
+
+ Test Files  3 passed (3)
+      Tests  23 passed (23)
+   Start at  05:35:59
+   Duration  590ms (transform 100ms, setup 0ms, collect 883ms, tests 161ms, environment 0ms, prepare 144ms)
+

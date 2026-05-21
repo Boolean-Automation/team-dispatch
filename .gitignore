@@ -20,3 +20,7 @@ dist/
 
 # Playwright MCP artifacts
 .playwright-mcp/
+
+# Playwright E2E runtime artifacts (test-results + report auto-generated)
+e2e/test-results/
+e2e/playwright-report/

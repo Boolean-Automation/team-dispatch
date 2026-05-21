@@ -1,0 +1,56 @@
+
+> @dispatch/core@0.0.0 test /Users/cody/boolean-knowledge/builds/team-dispatch/packages/core
+> vitest run
+
+
+ RUN  v2.1.9 /Users/cody/boolean-knowledge/builds/team-dispatch/packages/core
+
+ ✓ test/status-ladder.test.ts (44 tests) 3ms
+ ✓ test/sla-clock.test.ts (40 tests) 59ms
+ ✓ test/contact-discovery.test.ts (6 tests) 57ms
+ ✓ test/reply-service.test.ts (6 tests) 103ms
+ ✓ test/idempotency.test.ts (3 tests) 115ms
+ ✓ test/outbox-service.test.ts (12 tests) 173ms
+ ✓ test/ingest-message.test.ts (6 tests) 115ms
+ ✓ test/dm-resolution.test.ts (7 tests) 157ms
+ ✓ test/reassignment-service.test.ts (13 tests) 188ms
+ ✓ test/account-resolution.test.ts (3 tests) 115ms
+ ✓ test/internal-thread-service.test.ts (7 tests) 132ms
+ ✓ test/registry.test.ts (10 tests) 7ms
+ ✓ test/write-back.test.ts (6 tests) 4ms
+ ✓ test/undo-service.test.ts (5 tests) 73ms
+ ✓ test/orphan-reply.test.ts (4 tests) 40ms
+ ✓ test/effort-service.test.ts (6 tests) 51ms
+ ✓ test/routing.test.ts (2 tests) 39ms
+ ✓ test/ticket-service.test.ts (6 tests) 126ms
+
+ Test Files  18 passed (18)
+      Tests  186 passed (186)
+   Start at  07:01:02
+   Duration  1.48s (transform 427ms, setup 0ms, collect 4.99s, tests 1.56s, environment 2ms, prepare 978ms)
+
+
+> @dispatch/api@0.0.0 test /Users/cody/boolean-knowledge/builds/team-dispatch/packages/api
+> vitest run
+
+
+ RUN  v2.1.9 /Users/cody/boolean-knowledge/builds/team-dispatch/packages/api
+
+ ✓ test/clerk-auth.test.ts (8 tests) 63ms
+ ✓ test/ingestion.test.ts (9 tests) 68ms
+ ✓ test/messages.test.ts (9 tests) 110ms
+ ✓ test/reassignment.test.ts (8 tests) 140ms
+stdout | test/status-ladder.test.ts > SLA timer advance 1: waiting-client → follow-up-required (A18) > runSlaAdvances advances a waiting-client ticket past 2 business days
+[sla-timer] waiting-client → follow-up-required: ticket 2ce7f780-16d7-41e5-8a98-b852303d6b35
+
+ ✓ test/tickets.test.ts (7 tests) 147ms
+stdout | test/status-ladder.test.ts > SLA timer advance 2: follow-up-1-sent → closeout (A18, 3bd from followUp1SentAt) > runSlaAdvances advances a follow-up-1-sent ticket past 3 business days from followUp1SentAt
+[sla-timer] follow-up-1-sent → closeout: ticket 2ce7f780-16d7-41e5-8a98-b852303d6b35
+
+ ✓ test/status-ladder.test.ts (14 tests) 185ms
+
+ Test Files  6 passed (6)
+      Tests  55 passed (55)
+   Start at  07:01:04
+   Duration  912ms (transform 247ms, setup 0ms, collect 2.82s, tests 713ms, environment 0ms, prepare 326ms)
+

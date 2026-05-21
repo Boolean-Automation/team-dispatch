@@ -1,0 +1,367 @@
+
+> @dispatch/core@0.0.0 test /Users/cody/boolean-knowledge/builds/team-dispatch/packages/core
+> vitest run --reporter=verbose
+
+
+ RUN  v2.1.9 /Users/cody/boolean-knowledge/builds/team-dispatch/packages/core
+
+ ✓ test/status-ladder.test.ts > validateTransition — allowed transitions > new → on-you (routing)
+ ✓ test/status-ladder.test.ts > validateTransition — allowed transitions > on-you → waiting-client (A15 SE reply)
+ ✓ test/status-ladder.test.ts > validateTransition — allowed transitions > waiting-client → on-you (A16 client reply)
+ ✓ test/status-ladder.test.ts > validateTransition — allowed transitions > waiting-client → follow-up-required (A18 timer)
+ ✓ test/status-ladder.test.ts > validateTransition — allowed transitions > follow-up-required → follow-up-1-sent (FIX 4 SE first follow-up)
+ ✓ test/status-ladder.test.ts > validateTransition — allowed transitions > follow-up-1-sent → closeout (A18 3bd timer)
+ ✓ test/status-ladder.test.ts > validateTransition — allowed transitions > closeout → closed (manual)
+ ✓ test/status-ladder.test.ts > validateTransition — allowed transitions > closed → on-you (A17 reopen)
+ ✓ test/status-ladder.test.ts > validateTransition — allowed transitions > on-you → complete (A19 manual promotion)
+ ✓ test/status-ladder.test.ts > validateTransition — allowed transitions > waiting-client → complete (A19 manual)
+ ✓ test/status-ladder.test.ts > validateTransition — allowed transitions > follow-up-required → complete (A19 manual)
+ ✓ test/status-ladder.test.ts > validateTransition — allowed transitions > closed → complete (A19 manual)
+ ✓ test/status-ladder.test.ts > validateTransition — disallowed transitions > new → closed is not allowed
+ ✓ test/status-ladder.test.ts > validateTransition — disallowed transitions > on-you → follow-up-required is not allowed (must pass through waiting-client)
+ ✓ test/status-ladder.test.ts > validateTransition — disallowed transitions > waiting-client → closed is not allowed directly
+ ✓ test/status-ladder.test.ts > validateTransition — disallowed transitions > follow-up-required → waiting-client is not allowed (wrong direction)
+ ✓ test/status-ladder.test.ts > validateTransition — disallowed transitions > complete → on-you is not allowed (terminal state)
+ ✓ test/status-ladder.test.ts > validateTransition — disallowed transitions > follow-up-1-sent → follow-up-required is not allowed (backwards)
+ ✓ test/status-ladder.test.ts > validateTransition — same-status > on-you → on-you fails with 'already in status' error
+ ✓ test/status-ladder.test.ts > resolveReplyTransition > on-you → waiting-client (A15: SE sends reply)
+ ✓ test/status-ladder.test.ts > resolveReplyTransition > follow-up-required → follow-up-1-sent (FIX 4: SE sends first follow-up)
+ ✓ test/status-ladder.test.ts > resolveReplyTransition > waiting-client returns null (no transition from waiting-client)
+ ✓ test/status-ladder.test.ts > resolveReplyTransition > new returns null
+ ✓ test/status-ladder.test.ts > resolveReplyTransition > closed returns null — reply never transitions closed
+ ✓ test/status-ladder.test.ts > resolveReplyTransition > complete returns null
+ ✓ test/status-ladder.test.ts > resolveReplyTransition > follow-up-1-sent returns null
+ ✓ test/status-ladder.test.ts > resolveReplyTransition > closeout returns null
+ ✓ test/status-ladder.test.ts > resolveClientReplyTransition > waiting-client → on-you (A16: client replied while SE was waiting)
+ ✓ test/status-ladder.test.ts > resolveClientReplyTransition > closed → on-you (A17: client reply reopens a closed ticket)
+ ✓ test/status-ladder.test.ts > resolveClientReplyTransition > on-you returns null (client reply on on-you doesn't change status)
+ ✓ test/status-ladder.test.ts > resolveClientReplyTransition > follow-up-required returns null
+ ✓ test/status-ladder.test.ts > resolveClientReplyTransition > follow-up-1-sent returns null
+ ✓ test/status-ladder.test.ts > resolveClientReplyTransition > new returns null
+ ✓ test/status-ladder.test.ts > resolveClientReplyTransition > complete returns null
+ ✓ test/status-ladder.test.ts > resolveTimer2bdTransition > waiting-client → follow-up-required (A18 first advance)
+ ✓ test/status-ladder.test.ts > resolveTimer2bdTransition > follow-up-required returns null — timer never advances follow-up-required (waits for SE)
+ ✓ test/status-ladder.test.ts > resolveTimer2bdTransition > follow-up-1-sent returns null — different timer
+ ✓ test/status-ladder.test.ts > resolveTimer2bdTransition > on-you returns null
+ ✓ test/status-ladder.test.ts > resolveTimer3bdTransition > follow-up-1-sent → closeout (A18 second advance after 3bd from followUp1SentAt)
+ ✓ test/status-ladder.test.ts > resolveTimer3bdTransition > waiting-client returns null — different timer
+ ✓ test/status-ladder.test.ts > resolveTimer3bdTransition > follow-up-required returns null — timer never advances follow-up-required
+ ✓ test/status-ladder.test.ts > resolveTimer3bdTransition > closeout returns null
+ ✓ test/status-ladder.test.ts > full 7-state ladder chain > the full canonical ladder path is valid step by step
+ ✓ test/status-ladder.test.ts > full 7-state ladder chain > complete is reachable from every state except complete itself
+ ✓ test/sla-clock.test.ts > isBusinessHours > returns true at 9am PT on a weekday
+ ✓ test/sla-clock.test.ts > isBusinessHours > returns true at the biz window start (6:00am PT)
+ ✓ test/sla-clock.test.ts > isBusinessHours > returns false at exactly 5:00pm PT (end of window, exclusive)
+ ✓ test/sla-clock.test.ts > isBusinessHours > returns false at 5:59am PT (before window opens)
+ ✓ test/sla-clock.test.ts > isBusinessHours > returns false at midnight PT on a weekday
+ ✓ test/sla-clock.test.ts > isBusinessHours > returns false on Saturday
+ ✓ test/sla-clock.test.ts > isBusinessHours > returns false on Sunday
+ ✓ test/sla-clock.test.ts > isBusinessHours > returns true on a Friday at 4:59pm PT
+ ✓ test/sla-clock.test.ts > computeBusinessDuration > returns 0 when end <= start
+ ✓ test/sla-clock.test.ts > computeBusinessDuration > simple in-window span: 9am to 11am = 120 minutes
+ ✓ test/sla-clock.test.ts > computeBusinessDuration > whole business day: 6am to 5pm = 660 minutes
+ ✓ test/sla-clock.test.ts > computeBusinessDuration > span crossing overnight gap counts only in-window minutes
+ ✓ test/sla-clock.test.ts > computeBusinessDuration > span crossing a weekend skips Saturday and Sunday
+ ✓ test/sla-clock.test.ts > computeBusinessDuration > two full business days = 1320 minutes
+ ✓ test/sla-clock.test.ts > computeBusinessDuration > three full business days = 1980 minutes
+ ✓ test/sla-clock.test.ts > computeBusinessDuration > span entirely outside business hours = 0
+ ✓ test/sla-clock.test.ts > addBusinessMinutes > adds 60 minutes within a business day
+ ✓ test/sla-clock.test.ts > addBusinessMinutes > carries over to next day when window is exhausted
+ ✓ test/sla-clock.test.ts > addBusinessMinutes > skips over a weekend
+ ✓ test/sla-clock.test.ts > addBusinessMinutes > adds 0 minutes returns the same time
+ ✓ test/sla-clock.test.ts > addBusinessMinutes > starting outside biz hours advances to next window start before counting
+ ✓ test/sla-clock.test.ts > addBusinessMinutes > adds two full business days (1320 min) correctly
+ ✓ test/sla-clock.test.ts > hasExceededBusinessDays > returns false when less than 2 biz days have elapsed
+ ✓ test/sla-clock.test.ts > hasExceededBusinessDays > returns true after exactly 2 full biz days
+ ✓ test/sla-clock.test.ts > hasExceededBusinessDays > returns true after more than 2 biz days
+ ✓ test/sla-clock.test.ts > hasExceededBusinessDays > returns false when less than 3 biz days have elapsed
+ ✓ test/sla-clock.test.ts > hasExceededBusinessDays > returns true after exactly 3 full biz days
+ ✓ test/sla-clock.test.ts > hasExceededBusinessDays > correctly skips weekends when computing 2 biz days from Friday
+ ✓ test/sla-clock.test.ts > getSlaState > returns paused when slaPaused=true
+ ✓ test/sla-clock.test.ts > getSlaState > returns paused when slaDeadline is null
+ ✓ test/sla-clock.test.ts > getSlaState > returns over when past deadline
+ ✓ test/sla-clock.test.ts > getSlaState > returns warn when < 2 hours remain
+ ✓ test/sla-clock.test.ts > getSlaState > returns ok when >= 2 hours remain
+ ✓ test/sla-clock.test.ts > getSlaState > returns warn at exactly 119 minutes remaining
+ ✓ test/sla-clock.test.ts > DST boundary correctness (P2-K) > isBusinessHours is correct at 6am PDT on the Monday after spring-forward (Mon Mar 11 2024)
+ ✓ test/sla-clock.test.ts > DST boundary correctness (P2-K) > isBusinessHours is false at 5:59am PDT (before window opens)
+ ✓ test/sla-clock.test.ts > DST boundary correctness (P2-K) > isBusinessHours is correct at 5pm PDT (end of window, exclusive)
+ ✓ test/sla-clock.test.ts > DST boundary correctness (P2-K) > isBusinessHours is correct at 6am PST on the Monday after fall-back (Mon Nov 4 2024)
+ ✓ test/sla-clock.test.ts > DST boundary correctness (P2-K) > isBusinessHours is false at 5:59am PST (before window opens)
+ ✓ test/sla-clock.test.ts > DST boundary correctness (P2-K) > computeBusinessDuration handles a span that crosses the spring-forward DST transition
+ ✓ test/outbox-service.test.ts > insertOutboxRow > creates a pending row with the correct fields
+ ✓ test/outbox-service.test.ts > insertOutboxRow > prevents duplicate insert on the same idempotency_key
+ ✓ test/outbox-service.test.ts > pending row survives a simulated restart (durable outbox — FIX 6) > row inserted to DB is readable after 'restart' (fresh db reference)
+ ✓ test/effort-service.test.ts > setEffortBucket > sets the effort bucket and returns an undoToken
+ ✓ test/reply-service.test.ts > sendReply > creates an outbound Message and a pending outbox row
+ ✓ test/reply-service.test.ts > sendReply > returns a valid undoToken
+ ✓ test/outbox-service.test.ts > cancelOutboxRow (undo within window) > transitions pending → canceled
+ ✓ test/reassignment-service.test.ts > SE-initiated reassignment — pending handshake > creates a pending reassignment; tickets.assignee stays with proposer
+ ✓ test/undo-service.test.ts > undoByToken — ticket.created > reverses ticket.created by setting dismissed_at
+ ✓ test/undo-service.test.ts > undoByToken — ticket.dismissed > reverses ticket.dismissed by clearing dismissed_at
+ ✓ test/reply-service.test.ts > sendReply > moves ticket to waiting-client (not closed) when resolveTicket=true from on-you (A15)
+ ✓ test/reply-service.test.ts > sendReply > throws when the ticket does not exist
+ ✓ test/outbox-service.test.ts > cancelOutboxRow (undo within window) > returns already-terminal when row is already sent
+ ✓ test/effort-service.test.ts > setEffortBucket > is undoable — reverts to previous bucket
+ ✓ test/effort-service.test.ts > setEffortBucket > returns an error for an unknown ticket
+ ✓ test/effort-service.test.ts > service-layer guard — effort bucket on close (A7) > rejects 'closed' status when effort_bucket is null
+ ✓ test/effort-service.test.ts > service-layer guard — effort bucket on close (A7) > rejects 'complete' status when effort_bucket is null
+ ✓ test/undo-service.test.ts > undoByToken — ticket.status_changed > reverts status to the before state
+ ✓ test/undo-service.test.ts > undoByToken — error cases > returns not-found for an unknown token
+ ✓ test/reassignment-service.test.ts > SE-initiated reassignment — pending handshake > recipient accepts → status='accepted', assignee moves to recipient
+ ✓ test/reply-service.test.ts > undo on reply send > undo within window cancels outbox row and removes the message
+ ✓ test/effort-service.test.ts > service-layer guard — effort bucket on close (A7) > allows 'closed' after setting an effort bucket
+ ✓ test/effort-service.test.ts > SLA clock isolation — P2-3 > setting effort_bucket on a waiting-client ticket does NOT change waiting_client_since_at
+ ✓ test/undo-service.test.ts > undoByToken — error cases > returns already-undone for a token used twice
+ ✓ test/reassignment-service.test.ts > SE-initiated reassignment — pending handshake > recipient rejects → status='rejected', assignee stays with proposer
+ ✓ test/dm-resolution.test.ts > DM resolution via discovered Contact (P1-A / A9) > DM from a discovered Contact resolves to that Contact's Account
+ ✓ test/ingest-message.test.ts > ingestMessage — top-level messages > creates a ticket for a client-channel message
+ ✓ test/ingest-message.test.ts > ingestMessage — top-level messages > returns internal-channel for a registered internal channel
+ ✓ test/ingest-message.test.ts > ingestMessage — top-level messages > creates an unassigned ticket for an unknown channel
+ ✓ test/reply-service.test.ts > undo on reply send > undo with resolveTicket=true reverts ticket status (waiting-client → on-you)
+ ✓ test/outbox-service.test.ts > getDueOutboxRows > returns pending rows past their scheduled_at
+ ✓ test/outbox-service.test.ts > getDueOutboxRows > does NOT return rows whose scheduled_at is in the future
+ ✓ test/outbox-service.test.ts > markOutboxRowSent (idempotency guard — double-post prevention) > transitions pending → sent and returns true
+ ✓ test/outbox-service.test.ts > markOutboxRowSent (idempotency guard — double-post prevention) > returns false if the row is already sent (double-post guard)
+ ✓ test/outbox-service.test.ts > claimOutboxRow (P1-E: atomic claim) > atomically claims a pending row — transitions pending→sent and returns the id
+ ✓ test/undo-service.test.ts > undoByToken — message.created TOCTOU race (P1-1) > (a) undo before worker claims: cancels row, deletes message, reverts status
+ ✓ test/reassignment-service.test.ts > SE-initiated reassignment — pending handshake > accept fails when caller is not the recipient
+ ✓ test/dm-resolution.test.ts > DM resolution via discovered Contact (P1-A / A9) > DM from a different discovered Contact resolves to that Contact's Account
+ ✓ test/ingest-message.test.ts > ingestMessage — routing > routes to owning SE and sets status on-you
+ ✓ test/outbox-service.test.ts > claimOutboxRow (P1-E: atomic claim) > concurrent second claim of the same row returns null (double-post guard)
+ ✓ test/dm-resolution.test.ts > DM resolution via discovered Contact (P1-A / A9) > DM author with no discovered Contact → unknown-origin, unassigned (A9 / P1-B)
+ ✓ test/reassignment-service.test.ts > SE-initiated reassignment — pending handshake > accept fails when reassignment is already accepted
+ ✓ test/ingest-message.test.ts > ingestMessage — routing > creates a ticket-assigned notification for the owning SE
+ ✓ test/undo-service.test.ts > undoByToken — message.created TOCTOU race (P1-1) > (b) worker claims first: undo bails with undo-too-late, message NOT deleted
+ ✓ test/outbox-service.test.ts > markOutboxRowFailed — at-most-once send semantics (P2-1) > transitions sent → failed immediately (no retry-to-pending)
+ ✓ test/dm-resolution.test.ts > group-DM resolution (P1-A / A9) > group-DM resolves to the single client participant's Account
+ ✓ test/reassignment-service.test.ts > SE-initiated reassignment — pending handshake > reject fails when caller is not the recipient
+ ✓ test/outbox-service.test.ts > markOutboxRowFailed — at-most-once send semantics (P2-1) > WHERE status=sent guard: does not overwrite a canceled or already-failed row
+ ✓ test/ingest-message.test.ts > ingestMessage — audit log > appends a ticket.created audit entry
+ ✓ test/undo-service.test.ts > undoByToken — ticket.status_changed SLA columns (P2-B) > undo of on-you → waiting-client clears waiting_client_since_at
+ ✓ test/reassignment-service.test.ts > Admin-initiated reassignment — immediate > admin reassignment: status='accepted' immediately, assignee moves at once
+ ✓ test/dm-resolution.test.ts > group-DM resolution (P1-A / A9) > group-DM spanning two different client Accounts → unknown-origin (ambiguous)
+ ✓ test/dm-resolution.test.ts > unknown-origin quarantine on __unrouted__ account (P1-B / A10) > unknown-origin ticket has assignee=null and lands on __unrouted__ account
+ ✓ test/undo-service.test.ts > undoByToken — ticket.status_changed SLA columns (P2-B) > undo of waiting-client → on-you restores waiting_client_since_at
+ ✓ test/reassignment-service.test.ts > Undo reassignment actions > undo SE reassignment.created deletes the row
+ ✓ test/dm-resolution.test.ts > unknown-origin quarantine on __unrouted__ account (P1-B / A10) > unknown-origin ticket source_kind is stamped from event.sourceKind
+ ✓ test/undo-service.test.ts > undoByToken — message.created SLA columns (P2-C) > undo of send-and-resolve (on-you → waiting-client) clears waiting_client_since_at
+ ✓ test/reassignment-service.test.ts > Undo reassignment actions > undo admin reassignment.created reverts assignee
+ ✓ test/reassignment-service.test.ts > Undo reassignment actions > undo reassignment.accepted reverts assignee and resets to pending
+ ✓ test/reassignment-service.test.ts > Undo reassignment actions > undo reassignment.rejected resets to pending
+ ✓ test/contact-discovery.test.ts > contactDiscoverySync > upserts contacts with slack_user_id + discovered_via=channel-membership
+ ✓ test/contact-discovery.test.ts > contactDiscoverySync > does not re-upsert an already discovered contact
+ ✓ test/contact-discovery.test.ts > contactDiscoverySync > handles a channel whose member fetch fails gracefully
+ ✓ test/idempotency.test.ts > idempotency — top-level messages > delivers the same (channelId, eventTs) twice → exactly one Ticket
+ ✓ test/contact-discovery.test.ts > contactDiscoverySync > reports per-channel breakdown
+ ✓ test/contact-discovery.test.ts > resolveContactBySlackUser > resolves a discovered contact to their account
+ ✓ test/contact-discovery.test.ts > resolveContactBySlackUser > returns null for an undiscovered user
+ ✓ test/reassignment-service.test.ts > Concurrent-pending guard (P2-4) > second initiateReassignment while a pending row exists is rejected with error
+ ✓ test/idempotency.test.ts > idempotency — top-level messages > delivers 5 copies of the same event → still exactly one Ticket
+ ✓ test/reassignment-service.test.ts > Concurrent-pending guard (P2-4) > a new pending reassignment is allowed after the existing one is accepted
+ ✓ test/idempotency.test.ts > idempotency — thread replies > delivers the same reply (channelId, eventTs) twice → exactly one Message
+ ✓ test/reassignment-service.test.ts > Concurrent-pending guard (P2-4) > a new pending reassignment is allowed after the existing one is rejected
+ ✓ test/reassignment-service.test.ts > Notifications > SE-initiated reassignment creates an incoming notification for recipient
+ ✓ test/reassignment-service.test.ts > Notifications > admin-initiated reassignment creates an accepted notification for recipient
+ ✓ test/reassignment-service.test.ts > P2-A: DB-level partial unique index on pending reassignments > direct insert of a duplicate pending row violates the unique index
+ ✓ test/reassignment-service.test.ts > P2-A: DB-level partial unique index on pending reassignments > second accepted row for the same ticket is allowed (index is partial: pending only)
+ ✓ test/reassignment-service.test.ts > P2-D: Guarded accept/reject — stale-conflict path > second accept of an already-accepted row returns stale
+ ✓ test/reassignment-service.test.ts > P2-D: Guarded accept/reject — stale-conflict path > reject-after-accept returns stale
+ ✓ test/registry.test.ts > buildRegistry > returns the correct number of client entries
+ ✓ test/registry.test.ts > buildRegistry > maps slug, displayName, emailDomains, slackChannelIds, owningSe correctly
+ ✓ test/registry.test.ts > buildRegistry > handles multiple email_domains and slack_channel_ids
+ ✓ test/registry.test.ts > buildRegistry > sets owning_se to null when not provided (null/~)
+ ✓ test/registry.test.ts > classifyOrigin > classifies a registered client channel as 'client'
+ ✓ test/registry.test.ts > classifyOrigin > classifies a second client channel from a multi-channel entry as 'client'
+ ✓ test/registry.test.ts > classifyOrigin > classifies an explicitly registered internal channel as 'internal'
+ ✓ test/registry.test.ts > classifyOrigin > classifies an unknown channel as 'unknown' — NEVER silently internal
+ ✓ test/registry.test.ts > classifyOrigin > classifies an empty string as 'unknown'
+ ✓ test/registry.test.ts > classifyOrigin > parses the internal_channel_ids list from the fixture
+ ✓ test/write-back.test.ts > resolveSlackUserToken > reads SLACK_USER_TOKEN_<actorId> from the environment
+ ✓ test/write-back.test.ts > resolveSlackUserToken > returns undefined when no token is configured
+ ✓ test/write-back.test.ts > resolveSlackUserToken > returns undefined for an empty actorId
+ ✓ test/write-back.test.ts > postReply > fails gracefully when the SE has no configured token
+ ✓ test/write-back.test.ts > postReply > posts via the resolved per-SE token and returns ok on success
+ ✓ test/write-back.test.ts > postReply > wraps a poster exception as ok=false (worker never crashes)
+ ✓ test/internal-thread-service.test.ts > listInternalThreadMessages > returns an empty list for a new ticket with no internal messages
+ ✓ test/internal-thread-service.test.ts > postInternalMessage > creates a message and returns a valid undoToken
+ ✓ test/internal-thread-service.test.ts > postInternalMessage > throws on empty body
+ ✓ test/internal-thread-service.test.ts > postInternalMessage > multiple messages are returned oldest first
+ ✓ test/internal-thread-service.test.ts > postInternalMessage > messages have no Slack channel tag (A21 — dispatch-native only)
+ ✓ test/internal-thread-service.test.ts > undo internal thread message > undoByToken deletes the internal thread message
+ ✓ test/account-resolution.test.ts > account resolution — channel-keyed > resolves Account from channel id (client channel)
+ ✓ test/account-resolution.test.ts > account resolution — DM via discovered Contact > resolved Contact→Account after discovery sync (DM from DISCOVERED_USER)
+ ✓ test/internal-thread-service.test.ts > undo internal thread message > cannot undo the same token twice
+ ✓ test/account-resolution.test.ts > account resolution — DM author with no Contact > unknown-origin ticket for a DM author who has no discovered Contact
+ ✓ test/ticket-service.test.ts > listTickets > returns TicketCard with clientName from the account join
+ ✓ test/orphan-reply.test.ts > orphan-reply handling (FIX 7) > does not crash when a reply arrives before its parent
+ ✓ test/orphan-reply.test.ts > orphan-reply handling (FIX 7) > returns orphan-reply kind (not ignored or error)
+ ✓ test/orphan-reply.test.ts > orphan-reply handling (FIX 7) > does not fabricate a parent Ticket
+ ✓ test/ticket-service.test.ts > listTickets > returns a preview from the first message body (max 160 chars)
+ ✓ test/orphan-reply.test.ts > orphan-reply handling (FIX 7) > does not silently drop the orphan reply — kind is orphan-reply with channel info
+ ✓ test/routing.test.ts > routeTicket > assigns to owning SE and sets status on-you
+ ✓ test/routing.test.ts > routeTicket > leaves assignee null and status new when account has no owning_se
+ ✓ test/ticket-service.test.ts > listTickets > filters by status
+ ✓ test/ticket-service.test.ts > listTickets > excludes dismissed tickets
+ ✓ test/ticket-service.test.ts > getTicket > returns the TicketDto for an existing ticket
+ ✓ test/ticket-service.test.ts > getTicket > returns null for a non-existent ticket id
+
+ Test Files  18 passed (18)
+      Tests  200 passed (200)
+   Start at  08:07:59
+   Duration  1.89s (transform 497ms, setup 0ms, collect 5.91s, tests 2.75s, environment 2ms, prepare 1.39s)
+
+
+> @dispatch/api@0.0.0 test /Users/cody/boolean-knowledge/builds/team-dispatch/packages/api
+> vitest run --reporter=verbose
+
+
+ RUN  v2.1.9 /Users/cody/boolean-knowledge/builds/team-dispatch/packages/api
+
+ ✓ test/ingestion.test.ts > POST /api/ingest/slack — signature verification (FIX 3) > rejects unsigned request with 401
+ ✓ test/ingestion.test.ts > POST /api/ingest/slack — signature verification (FIX 3) > rejects request with missing timestamp header with 401
+ ✓ test/ingestion.test.ts > POST /api/ingest/slack — signature verification (FIX 3) > rejects request with a stale timestamp (> 5 min old)
+ ✓ test/ingestion.test.ts > POST /api/ingest/slack — signature verification (FIX 3) > rejects request with a wrong signing secret
+ ✓ test/ingestion.test.ts > POST /api/ingest/slack — signature verification (FIX 3) > accepts a validly-signed request with NO Clerk session
+ ✓ test/ingestion.test.ts > POST /api/ingest/slack — signature verification (FIX 3) > handles url_verification handshake and returns challenge
+ ✓ test/ingestion.test.ts > POST /api/ingest/stub — requires Clerk-admin auth > returns 401 without auth
+ ✓ test/ingestion.test.ts > POST /api/ingest/stub — requires Clerk-admin auth > returns 403 for a non-admin session
+ ✓ test/machine-auth.test.ts > requireMachineCredential — MCP routes > returns 401 when no Authorization header is present
+ ✓ test/machine-auth.test.ts > requireMachineCredential — MCP routes > returns 401 when a Clerk browser session JWT is presented on an MCP route
+ ✓ test/clerk-auth.test.ts > requireClerkSession guard (GET /api/me) > returns 401 when no Authorization header is present
+ ✓ test/clerk-auth.test.ts > requireClerkSession guard (GET /api/me) > returns 401 when the token is invalid / expired
+ ✓ test/clerk-auth.test.ts > requireClerkSession guard (GET /api/me) > returns 200 with { userId, role: 'se' } for a valid se token
+ ✓ test/clerk-auth.test.ts > requireClerkSession guard (GET /api/me) > returns 200 with { userId, role: 'admin' } for a valid admin token
+ ✓ test/clerk-auth.test.ts > requireClerkSession guard (GET /api/me) > defaults role to 'se' when publicMetadata.role is absent
+ ✓ test/clerk-auth.test.ts > requireClerkAdmin guard (admin-only route) > returns 401 when no token is provided on an admin-only route
+ ✓ test/clerk-auth.test.ts > requireClerkAdmin guard (admin-only route) > returns 403 when a valid se user hits an admin-only route
+ ✓ test/clerk-auth.test.ts > requireClerkAdmin guard (admin-only route) > returns 200 when a valid admin presents token on admin-only route
+ ✓ test/messages.test.ts > GET /api/tickets/:id/messages > returns 200 with message list for authenticated request
+ ✓ test/messages.test.ts > GET /api/tickets/:id/messages > returns 401 without auth token
+ ✓ test/ingestion.test.ts > POST /api/ingest/stub — requires Clerk-admin auth > accepts an admin session and creates a ticket
+ ✓ test/reassignment.test.ts > POST /api/tickets/:id/reassign (SE) > creates a pending reassignment (201)
+ ✓ test/reassignment.test.ts > POST /api/tickets/:id/reassign (SE) > returns 401 without auth token
+ ✓ test/reassignment.test.ts > POST /api/tickets/:id/reassign (SE) > returns 400 without recipientId
+ ✓ test/status-ladder.test.ts > PATCH /api/tickets/:id/status > returns 401 without auth token
+ ✓ test/status-ladder.test.ts > PATCH /api/tickets/:id/status > returns 400 for invalid status value
+ ✓ test/status-ladder.test.ts > PATCH /api/tickets/:id/status > returns 404 for non-existent ticket
+ ✓ test/status-ladder.test.ts > PATCH /api/tickets/:id/status > returns 422 for a disallowed transition (new → closed)
+ ✓ test/messages.test.ts > POST /api/tickets/:id/messages > creates a message + outbox row and returns 201 with undoToken
+ ✓ test/messages.test.ts > POST /api/tickets/:id/messages > returns 400 when body is missing
+ ✓ test/messages.test.ts > POST /api/tickets/:id/messages > returns 400 when body is empty string
+ ✓ test/messages.test.ts > POST /api/tickets/:id/messages > returns 404 for non-existent ticket
+ ✓ test/status-ladder.test.ts > PATCH /api/tickets/:id/status > returns 200 for a valid transition (new → on-you)
+ ✓ test/machine-auth.test.ts > requireMachineCredential — MCP routes > returns 200 with correct payload when a valid machine token is presented
+ ✓ test/reassignment.test.ts > POST /api/tickets/:id/reassign (admin) > admin creates an accepted reassignment immediately (201)
+ ✓ test/messages.test.ts > POST /api/tickets/:id/messages > moves ticket to waiting-client (not closed) when resolve=true from on-you (A15)
+ ✓ test/tickets.test.ts > GET /api/tickets > returns 200 with an array of ticket cards
+ ✓ test/messages.test.ts > POST /api/tickets/:id/messages > undoToken from POST can be used to cancel outbox row via POST /api/undo
+ ✓ test/messages.test.ts > POST /api/tickets/:id/messages > returns 401 without auth token
+ ✓ test/reassignment.test.ts > POST .../reassign/:reassignmentId/accept > recipient accepts SE-initiated reassignment (200)
+ ✓ test/machine-auth.test.ts > requireMachineCredential — MCP routes > returns 200 for admin machine token as well
+ ✓ test/machine-auth.test.ts > requireMachineCredential — MCP routes > returns 401 when machine token has invalid signature
+ ✓ test/machine-auth.test.ts > machine credential is rejected on session routes > returns 401 when a machine token is presented on a Clerk session route
+ ✓ test/tickets.test.ts > GET /api/tickets > returns cards with clientName, preview, ageMin fields
+ ✓ test/reassignment.test.ts > POST .../reassign/:reassignmentId/accept > returns 400 when caller is not the recipient
+ ✓ test/status-ladder.test.ts > Full 7-state ladder chain via PATCH > walks New → On You → Waiting on Client → Follow-up Required → Follow-up 1 Sent → Closeout → Closed
+ ✓ test/status-ladder.test.ts > complete is reachable via manual PATCH (A19) > on-you → complete succeeds
+ ✓ test/reassignment.test.ts > POST .../reassign/:reassignmentId/reject > recipient rejects SE-initiated reassignment (200)
+ ✓ test/tickets.test.ts > GET /api/tickets > filters by status=new
+ ✓ test/tickets.test.ts > GET /api/tickets > returns 401 without a token
+ ✓ test/tickets.test.ts > GET /api/tickets/:id > returns 200 with the ticket dto
+ ✓ test/tickets.test.ts > GET /api/tickets/:id > returns 200 when fetching by DSP- display id (P1-D)
+ ✓ test/tickets.test.ts > GET /api/tickets/:id > returns 404 for a missing ticket id
+ ✓ test/tickets.test.ts > GET /api/tickets/:id > returns 400 for a malformed ticket id (P3-A)
+ ✓ test/tickets.test.ts > GET /api/tickets/:id > returns 400 for a partial UUID (P3-A)
+ ✓ test/machine-auth.test.ts > MCP route structure > GET /api/mcp/tickets returns array with valid machine token
+ ✓ test/machine-auth.test.ts > MCP route structure > GET /api/mcp/accounts returns array with valid machine token
+ ✓ test/reassignment.test.ts > POST /api/undo for reassignment > undos a SE-initiated reassignment (removes the row)
+ ✓ test/status-ladder.test.ts > SE first follow-up: follow-up-required → follow-up-1-sent (FIX 4) > sendReply with resolveTicket=true from follow-up-required stamps followUp1SentAt
+ ✓ test/status-ladder.test.ts > A15: sendReply with resolveTicket=true from on-you → waiting-client (not closed) > does NOT move ticket to closed — moves to waiting-client
+ ✓ test/machine-auth.test.ts > MCP route structure > GET /api/mcp/tickets/:id returns 404 for unknown UUID
+stdout | test/status-ladder.test.ts > SLA timer advance 1: waiting-client → follow-up-required (A18) > runSlaAdvances advances a waiting-client ticket past 2 business days
+[sla-timer] waiting-client → follow-up-required: ticket a2ab900f-13ca-4e86-94f2-ec499113bf96
+
+stdout | test/status-ladder.test.ts > SLA timer advance 2: follow-up-1-sent → closeout (A18, 3bd from followUp1SentAt) > runSlaAdvances advances a follow-up-1-sent ticket past 3 business days from followUp1SentAt
+[sla-timer] follow-up-1-sent → closeout: ticket a2ab900f-13ca-4e86-94f2-ec499113bf96
+
+ ✓ test/machine-auth.test.ts > MCP route structure > GET /api/mcp/accounts/:id returns 404 for unknown UUID
+ ✓ test/machine-auth.test.ts > MCP route structure > GET /api/mcp/tickets/:id with DSP- display id returns 404 for unknown
+ ✓ test/machine-auth.test.ts > P2-E: requireMachineCredential — claim shape validation > returns 401 when sub is missing (undefined)
+ ✓ test/machine-auth.test.ts > P2-E: requireMachineCredential — claim shape validation > returns 401 when sub is an empty string
+ ✓ test/machine-auth.test.ts > P2-E: requireMachineCredential — claim shape validation > returns 401 when role is an unknown value (e.g. 'superuser')
+ ✓ test/machine-auth.test.ts > P2-E: requireMachineCredential — claim shape validation > returns 401 when iat is missing (undefined)
+ ✓ test/machine-auth.test.ts > P3-A: Malformed ticket id returns 400 on MCP route > GET /api/mcp/tickets/:id returns 400 for a non-UUID non-DSP id
+ ✓ test/machine-auth.test.ts > P3-A: Malformed ticket id returns 400 on MCP route > GET /api/mcp/tickets/:id returns 400 for a partial UUID
+ ✓ test/status-ladder.test.ts > SLA timer advance 1: waiting-client → follow-up-required (A18) > runSlaAdvances advances a waiting-client ticket past 2 business days
+ ✓ test/status-ladder.test.ts > SLA timer advance 2: follow-up-1-sent → closeout (A18, 3bd from followUp1SentAt) > runSlaAdvances advances a follow-up-1-sent ticket past 3 business days from followUp1SentAt
+ ✓ test/status-ladder.test.ts > SLA timer does NOT advance follow-up-required (waits for SE first follow-up) > runSlaAdvances leaves follow-up-required unchanged
+ ✓ test/status-ladder.test.ts > A16: client reply on waiting-client ticket flips to on-you > ingestMessage of a thread reply flips waiting-client → on-you
+ ✓ test/status-ladder.test.ts > A17: client reply on closed ticket reopens to on-you > ingestMessage of a thread reply reopens a closed ticket
+
+ Test Files  7 passed (7)
+      Tests  74 passed (74)
+   Start at  08:08:01
+   Duration  1.30s (transform 311ms, setup 0ms, collect 4.90s, tests 1.27s, environment 1ms, prepare 439ms)
+
+
+> @dispatch/mcp@0.0.0 test /Users/cody/boolean-knowledge/builds/team-dispatch/packages/mcp
+> vitest run --reporter=verbose
+
+
+ RUN  v2.1.9 /Users/cody/boolean-knowledge/builds/team-dispatch/packages/mcp
+
+ ✓ test/tools.test.ts > DispatchClient > listTickets: calls correct URL with Bearer auth
+ ✓ test/tools.test.ts > DispatchClient > listTickets: appends query params when provided
+ ✓ test/tools.test.ts > DispatchClient > listTickets: returns parsed JSON array
+ ✓ test/tools.test.ts > DispatchClient > getTicket: calls correct URL for UUID
+ ✓ test/tools.test.ts > DispatchClient > getTicket: calls correct URL for DSP- display id
+ ✓ test/tools.test.ts > DispatchClient > getTicket: returns parsed JSON object
+ ✓ test/tools.test.ts > DispatchClient > listAccounts: calls correct URL with Bearer auth
+ ✓ test/tools.test.ts > DispatchClient > listAccounts: returns parsed JSON array
+ ✓ test/tools.test.ts > DispatchClient > getAccount: calls correct URL for UUID
+ ✓ test/tools.test.ts > DispatchClient > getAccount: returns parsed JSON object
+ ✓ test/tools.test.ts > DispatchClient > throws on non-OK response
+ ✓ test/tools.test.ts > DispatchClient > throws on 401 from API
+ ✓ test/tools.test.ts > DispatchClient > imports cleanly without @dispatch/core or @dispatch/db
+
+ Test Files  1 passed (1)
+      Tests  13 passed (13)
+   Start at  08:08:03
+   Duration  270ms (transform 25ms, setup 0ms, collect 21ms, tests 3ms, environment 0ms, prepare 40ms)
+
+
+> dispatch@0.0.0 e2e /Users/cody/boolean-knowledge/builds/team-dispatch
+> playwright test
+
+
+Running 26 tests using 1 worker
+
+  ✓   1 [chromium] › e2e/tests/density-toggle.spec.ts:18:3 › Density toggle › data-density="compact" is the default on <body> (452ms)
+  ✓   2 [chromium] › e2e/tests/density-toggle.spec.ts:24:3 › Density toggle › density attribute is present on <body> (either compact or comfortable) (250ms)
+  ✓   3 [chromium] › e2e/tests/internal-thread.spec.ts:27:3 › Internal Thread — OQ-3 dispatch-native › Internal thread tab is clickable and switches view (329ms)
+  ✓   4 [chromium] › e2e/tests/internal-thread.spec.ts:39:3 › Internal Thread — OQ-3 dispatch-native › internal thread messages render without a #channel-name Slack tag (OQ-3) (278ms)
+  ✓   5 [chromium] › e2e/tests/internal-thread.spec.ts:55:3 › Internal Thread — OQ-3 dispatch-native › Internal thread tab button itself does not have a Slack channel src-tag (253ms)
+  ✓   6 [chromium] › e2e/tests/internal-thread.spec.ts:65:3 › Internal Thread — OQ-3 dispatch-native › internal thread area renders when the tab is active (dispatch-native component mounts) (289ms)
+  ✓   7 [chromium] › e2e/tests/issues-board.spec.ts:34:3 › Issues Board › renders six kanban columns in the correct plan order (242ms)
+  ✓   8 [chromium] › e2e/tests/issues-board.spec.ts:48:3 › Issues Board › rail renders the saved-views section (239ms)
+  ✓   9 [chromium] › e2e/tests/issues-board.spec.ts:61:3 › Issues Board › topbar renders filter chips, sort chip, and New-ticket button (239ms)
+  ✓  10 [chromium] › e2e/tests/issues-board.spec.ts:86:3 › Issues Board › status bar renders ticket counts and last-sync label (227ms)
+  ✓  11 [chromium] › e2e/tests/issues-board.spec.ts:96:3 › Issues Board › Type filter chip click opens dropdown with type options (230ms)
+  ✓  12 [chromium] › e2e/tests/issues-board.spec.ts:112:3 › Issues Board › Sort chip click opens menu and selecting Oldest first updates the chip label (298ms)
+  ✓  13 [chromium] › e2e/tests/route-stubs.spec.ts:24:3 › Settings stub page (Surface 4) › rail renders with Settings nav item highlighted and Configure sub-nav (246ms)
+  ✓  14 [chromium] › e2e/tests/route-stubs.spec.ts:43:3 › Settings stub page (Surface 4) › topbar shows Settings screen title (241ms)
+  ✓  15 [chromium] › e2e/tests/route-stubs.spec.ts:53:3 › Settings stub page (Surface 4) › does NOT render the full Trigger rule builder (deferred) (232ms)
+  ✓  16 [chromium] › e2e/tests/route-stubs.spec.ts:71:3 › Analytics stub page (Surface 5) › rail renders with Analytics nav item highlighted and Dashboards sub-nav (228ms)
+  ✓  17 [chromium] › e2e/tests/route-stubs.spec.ts:87:3 › Analytics stub page (Surface 5) › topbar shows Analytics screen title (234ms)
+  ✓  18 [chromium] › e2e/tests/route-stubs.spec.ts:96:3 › Analytics stub page (Surface 5) › does NOT render Phase-4 chart elements (charts deferred to Phase 4) (229ms)
+  ✓  19 [chromium] › e2e/tests/ticket-detail.spec.ts:26:3 › Ticket Detail — fixture path › four-column layout is present (279ms)
+  ✓  20 [chromium] › e2e/tests/ticket-detail.spec.ts:34:3 › Ticket Detail — fixture path › header shows the ticket ID and a title (224ms)
+  ✓  21 [chromium] › e2e/tests/ticket-detail.spec.ts:47:3 › Ticket Detail — fixture path › tabs bar shows Chat, Internal thread, and Linked tabs (236ms)
+  ✓  22 [chromium] › e2e/tests/ticket-detail.spec.ts:62:3 › Ticket Detail — fixture path › chat thread renders messages (279ms)
+  ✓  23 [chromium] › e2e/tests/ticket-detail.spec.ts:71:3 › Ticket Detail — fixture path › composer shows Send & resolve and Send & keep open buttons (238ms)
+  ✓  24 [chromium] › e2e/tests/ticket-detail.spec.ts:84:3 › Ticket Detail — fixture path › right panel shows Ticket & client panel by default (248ms)
+  ✓  25 [chromium] › e2e/tests/ticket-detail.spec.ts:94:3 › Ticket Detail — fixture path › RToolbar shows Info + Activity icons but NOT a terminal/claude-code icon (284ms)
+  ✓  26 [chromium] › e2e/tests/ticket-detail.spec.ts:110:3 › Ticket Detail — fixture path › Phase-3 exclusions: no clock-in or billable controls in the header (266ms)
+
+  26 passed (8.5s)

@@ -1,0 +1,106 @@
+
+> @dispatch/core@0.0.0 test /Users/cody/boolean-knowledge/builds/team-dispatch/packages/core
+> vitest run --run
+
+
+ RUN  v2.1.9 /Users/cody/boolean-knowledge/builds/team-dispatch/packages/core
+
+ ✓ test/status-ladder.test.ts (44 tests) 5ms
+ ✓ test/sla-clock.test.ts (40 tests) 47ms
+ ✓ test/effort-service.test.ts (7 tests) 83ms
+ ✓ test/reply-service.test.ts (6 tests) 109ms
+ ✓ test/undo-service.test.ts (7 tests) 134ms
+ ✓ test/ingest-message.test.ts (6 tests) 122ms
+ ✓ test/outbox-service.test.ts (13 tests) 191ms
+ ✓ test/dm-resolution.test.ts (7 tests) 183ms
+ ✓ test/contact-discovery.test.ts (6 tests) 87ms
+ ✓ test/idempotency.test.ts (3 tests) 167ms
+ ✓ test/reassignment-service.test.ts (16 tests) 420ms
+ ✓ test/registry.test.ts (10 tests) 9ms
+ ✓ test/write-back.test.ts (6 tests) 2ms
+ ✓ test/orphan-reply.test.ts (4 tests) 36ms
+ ✓ test/account-resolution.test.ts (3 tests) 43ms
+ ✓ test/internal-thread-service.test.ts (7 tests) 45ms
+ ✓ test/routing.test.ts (2 tests) 52ms
+ ✓ test/ticket-service.test.ts (6 tests) 145ms
+
+ Test Files  18 passed (18)
+      Tests  193 passed (193)
+   Start at  07:38:25
+   Duration  1.58s (transform 380ms, setup 0ms, collect 5.18s, tests 1.88s, environment 2ms, prepare 1.02s)
+
+
+> @dispatch/api@0.0.0 test /Users/cody/boolean-knowledge/builds/team-dispatch/packages/api
+> vitest run --run
+
+
+ RUN  v2.1.9 /Users/cody/boolean-knowledge/builds/team-dispatch/packages/api
+
+ ✓ test/clerk-auth.test.ts (8 tests) 127ms
+ ✓ test/ingestion.test.ts (9 tests) 130ms
+ ✓ test/messages.test.ts (9 tests) 181ms
+ ✓ test/tickets.test.ts (7 tests) 206ms
+ ✓ test/reassignment.test.ts (8 tests) 244ms
+stdout | test/status-ladder.test.ts > SLA timer advance 1: waiting-client → follow-up-required (A18) > runSlaAdvances advances a waiting-client ticket past 2 business days
+[sla-timer] waiting-client → follow-up-required: ticket df4a1e1d-0866-4550-80f4-4cc185c4e8be
+
+stdout | test/status-ladder.test.ts > SLA timer advance 2: follow-up-1-sent → closeout (A18, 3bd from followUp1SentAt) > runSlaAdvances advances a follow-up-1-sent ticket past 3 business days from followUp1SentAt
+[sla-timer] follow-up-1-sent → closeout: ticket df4a1e1d-0866-4550-80f4-4cc185c4e8be
+
+ ✓ test/machine-auth.test.ts (11 tests) 278ms
+ ✓ test/status-ladder.test.ts (14 tests) 307ms
+
+ Test Files  7 passed (7)
+      Tests  66 passed (66)
+   Start at  07:38:27
+   Duration  1.23s (transform 251ms, setup 0ms, collect 4.70s, tests 1.47s, environment 1ms, prepare 383ms)
+
+
+> @dispatch/mcp@0.0.0 test /Users/cody/boolean-knowledge/builds/team-dispatch/packages/mcp
+> vitest run --run
+
+
+ RUN  v2.1.9 /Users/cody/boolean-knowledge/builds/team-dispatch/packages/mcp
+
+ ✓ test/tools.test.ts (13 tests) 3ms
+
+ Test Files  1 passed (1)
+      Tests  13 passed (13)
+   Start at  07:38:29
+   Duration  247ms (transform 22ms, setup 0ms, collect 20ms, tests 3ms, environment 0ms, prepare 33ms)
+
+
+> dispatch@0.0.0 e2e /Users/cody/boolean-knowledge/builds/team-dispatch
+> playwright test
+
+
+Running 26 tests using 1 worker
+
+  ✓   1 [chromium] › e2e/tests/density-toggle.spec.ts:18:3 › Density toggle › data-density="compact" is the default on <body> (424ms)
+  ✓   2 [chromium] › e2e/tests/density-toggle.spec.ts:24:3 › Density toggle › density attribute is present on <body> (either compact or comfortable) (256ms)
+  ✓   3 [chromium] › e2e/tests/internal-thread.spec.ts:27:3 › Internal Thread — OQ-3 dispatch-native › Internal thread tab is clickable and switches view (1.6s)
+  ✓   4 [chromium] › e2e/tests/internal-thread.spec.ts:39:3 › Internal Thread — OQ-3 dispatch-native › internal thread messages render without a #channel-name Slack tag (OQ-3) (1.7s)
+  ✓   5 [chromium] › e2e/tests/internal-thread.spec.ts:55:3 › Internal Thread — OQ-3 dispatch-native › Internal thread tab button itself does not have a Slack channel src-tag (1.5s)
+  ✓   6 [chromium] › e2e/tests/internal-thread.spec.ts:65:3 › Internal Thread — OQ-3 dispatch-native › internal thread area renders when the tab is active (dispatch-native component mounts) (1.6s)
+  ✓   7 [chromium] › e2e/tests/issues-board.spec.ts:34:3 › Issues Board › renders six kanban columns in the correct plan order (236ms)
+  ✓   8 [chromium] › e2e/tests/issues-board.spec.ts:48:3 › Issues Board › rail renders the saved-views section (247ms)
+  ✓   9 [chromium] › e2e/tests/issues-board.spec.ts:61:3 › Issues Board › topbar renders filter chips, sort chip, and New-ticket button (227ms)
+  ✓  10 [chromium] › e2e/tests/issues-board.spec.ts:86:3 › Issues Board › status bar renders ticket counts and last-sync label (239ms)
+  ✓  11 [chromium] › e2e/tests/issues-board.spec.ts:96:3 › Issues Board › Type filter chip click opens dropdown with type options (258ms)
+  ✓  12 [chromium] › e2e/tests/issues-board.spec.ts:112:3 › Issues Board › Sort chip click opens menu and selecting Oldest first updates the chip label (286ms)
+  ✓  13 [chromium] › e2e/tests/route-stubs.spec.ts:24:3 › Settings stub page (Surface 4) › rail renders with Settings nav item highlighted and Configure sub-nav (224ms)
+  ✓  14 [chromium] › e2e/tests/route-stubs.spec.ts:43:3 › Settings stub page (Surface 4) › topbar shows Settings screen title (227ms)
+  ✓  15 [chromium] › e2e/tests/route-stubs.spec.ts:53:3 › Settings stub page (Surface 4) › does NOT render the full Trigger rule builder (deferred) (248ms)
+  ✓  16 [chromium] › e2e/tests/route-stubs.spec.ts:71:3 › Analytics stub page (Surface 5) › rail renders with Analytics nav item highlighted and Dashboards sub-nav (237ms)
+  ✓  17 [chromium] › e2e/tests/route-stubs.spec.ts:87:3 › Analytics stub page (Surface 5) › topbar shows Analytics screen title (216ms)
+  ✓  18 [chromium] › e2e/tests/route-stubs.spec.ts:96:3 › Analytics stub page (Surface 5) › does NOT render Phase-4 chart elements (charts deferred to Phase 4) (220ms)
+  ✓  19 [chromium] › e2e/tests/ticket-detail.spec.ts:26:3 › Ticket Detail — fixture path › four-column layout is present (1.5s)
+  ✓  20 [chromium] › e2e/tests/ticket-detail.spec.ts:34:3 › Ticket Detail — fixture path › header shows the ticket ID and a title (1.5s)
+  ✓  21 [chromium] › e2e/tests/ticket-detail.spec.ts:47:3 › Ticket Detail — fixture path › tabs bar shows Chat, Internal thread, and Linked tabs (1.5s)
+  ✓  22 [chromium] › e2e/tests/ticket-detail.spec.ts:62:3 › Ticket Detail — fixture path › chat thread renders messages (1.5s)
+  ✓  23 [chromium] › e2e/tests/ticket-detail.spec.ts:71:3 › Ticket Detail — fixture path › composer shows Send & resolve and Send & keep open buttons (1.5s)
+  ✓  24 [chromium] › e2e/tests/ticket-detail.spec.ts:84:3 › Ticket Detail — fixture path › right panel shows Ticket & client panel by default (1.5s)
+  ✓  25 [chromium] › e2e/tests/ticket-detail.spec.ts:94:3 › Ticket Detail — fixture path › RToolbar shows Info + Activity icons but NOT a terminal/claude-code icon (1.5s)
+  ✓  26 [chromium] › e2e/tests/ticket-detail.spec.ts:110:3 › Ticket Detail — fixture path › Phase-3 exclusions: no clock-in or billable controls in the header (1.5s)
+
+  26 passed (23.4s)

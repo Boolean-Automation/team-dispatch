@@ -60,6 +60,8 @@ export interface Ticket {
   assignee: string | null; // Clerk user id or null (unassigned)
   effortBucket: EffortBucket;
   sourceKind: SourceKind;
+  sourceChannelId?: string | null;
+  sourceEventTs?: string | null;
   originClass: OriginClass;
   preview: string; // message excerpt, first 160 chars
   ageMin: number; // minutes since opened_at
@@ -81,6 +83,33 @@ export interface BoardFilters {
   type: string; // "all" or TicketType
 }
 
+// ── Message ───────────────────────────────────────────────────────────────────
+
+export interface Message {
+  id: string;
+  ticketId: string;
+  direction: "inbound" | "outbound";
+  authorKind: "client" | "se";
+  authorRef: string;
+  body: string;
+  slackTs?: string | null;
+  postedAt: string;
+  createdAt: string;
+}
+
+// ── Activity ──────────────────────────────────────────────────────────────────
+
+export interface ActivityEntry {
+  id: string;
+  event: string;
+  actorId?: string | null;
+  ticketId?: string | null;
+  before?: Record<string, unknown> | null;
+  after?: Record<string, unknown> | null;
+  undoToken?: string | null;
+  createdAt: string;
+}
+
 // ── View counts for the rail ──────────────────────────────────────────────────
 
 export interface ViewCounts {
@@ -89,4 +118,24 @@ export interface ViewCounts {
   mine: number;
   accounts: number;
   closed: number;
+  shared?: number; // Slice 7: tickets where the user is a reinforcement collaborator (A27)
+}
+
+// ── Reinforcement (collaborator join) ─────────────────────────────────────────
+
+export interface ReinforcementInfo {
+  ticketId: string;
+  collaborator: string;
+  addedAt: string;
+}
+
+// ── Internal thread message ───────────────────────────────────────────────────
+
+export interface InternalThreadMessageInfo {
+  id: string;
+  ticketId: string;
+  authorId: string;
+  body: string;
+  postedAt: string;
+  createdAt: string;
 }

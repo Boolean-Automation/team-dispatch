@@ -3,17 +3,18 @@
 // Implements the four route-auth-class guards defined in plan.md §3:
 //
 //   (a) requireClerkSession  — Clerk session JWT (web app operator routes)
-//   (b) requireSlackSignature — Slack HMAC (Slice 4 — NOT added here yet)
+//   (b) requireSlackSignature — Slack HMAC (Slice 4)
 //   (c) requireClerkAdmin    — requireClerkSession + role === "admin"
-//   (d) requireMachineCredential — MCP machine token (Slice 8 — NOT added here yet)
+//   (d) requireMachineCredential — MCP machine token (HS256 JWT, Slice 8)
 //
 // Each route opts into exactly ONE guard as a preHandler.
 // There is NO blanket /api/* hook — that would block the Slack ingestion
 // webhook which must accept requests carrying no Clerk session.
 //
-// Slice 2 ships classes (a) and (c). Classes (b) and (d) are stubs exported
-// here so the plugin file is the single module future slices extend.
+// Slice 2 ships classes (a) and (c). Slice 4 ships (b). Slice 8 ships (d).
 
+import crypto from "node:crypto";
+import jwt from "jsonwebtoken";
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import fp from "fastify-plugin";
 
@@ -144,30 +145,267 @@ export async function requireClerkAdmin(
   }
 }
 
-// ── Stub: requireSlackSignature (route-class b) — Slice 4 ─────────────────────
+// ── Guard: requireSlackSignature (route-class b) ──────────────────────────────
+//
+// Validates the Slack HMAC request signature:
+//   X-Slack-Signature: v0=<hmac-sha256>
+//   X-Slack-Request-Timestamp: <unix-epoch>
+//
+// Rejects requests older than 5 minutes to prevent replay attacks.
+// Also handles the Events-API url_verification handshake transparently:
+//   when the body contains { type: "url_verification" } the handler
+//   replies 200 with { challenge } directly without reaching the route handler.
+//
+// The signing secret is read from process.env.SLACK_SIGNING_SECRET.
+// Tests inject a mock via _setSlackSigningSecretForTest.
 
-export async function requireSlackSignature(
-  _request: FastifyRequest,
-  reply: FastifyReply
-): Promise<void> {
-  return reply.status(501).send({
-    error: "Not Implemented",
-    message: "Slack signature verification is added in Slice 4",
-    statusCode: 501,
-  });
+let _slackSigningSecret: string | null = null;
+
+/** Inject a custom signing secret for tests. */
+export function _setSlackSigningSecretForTest(secret: string): void {
+  _slackSigningSecret = secret;
 }
 
-// ── Stub: requireMachineCredential (route-class d) — Slice 8 ──────────────────
+/** Reset to env-based secret. */
+export function _resetSlackSigningSecret(): void {
+  _slackSigningSecret = null;
+}
 
-export async function requireMachineCredential(
-  _request: FastifyRequest,
+function getSlackSigningSecret(): string {
+  return _slackSigningSecret ?? process.env.SLACK_SIGNING_SECRET ?? "";
+}
+
+export async function requireSlackSignature(
+  request: FastifyRequest,
   reply: FastifyReply
 ): Promise<void> {
-  return reply.status(501).send({
-    error: "Not Implemented",
-    message: "Machine credential auth is added in Slice 8",
-    statusCode: 501,
-  });
+  const signingSecret = getSlackSigningSecret();
+  if (!signingSecret) {
+    return reply.status(500).send({
+      error: "Internal Server Error",
+      message: "SLACK_SIGNING_SECRET not configured",
+      statusCode: 500,
+    });
+  }
+
+  const timestamp = request.headers["x-slack-request-timestamp"];
+  const signature = request.headers["x-slack-signature"];
+
+  if (typeof timestamp !== "string" || typeof signature !== "string") {
+    return reply.status(401).send({
+      error: "Unauthorized",
+      message: "Missing Slack signature headers",
+      statusCode: 401,
+    });
+  }
+
+  // Replay attack prevention: reject requests older than 5 minutes
+  const nowSec = Math.floor(Date.now() / 1000);
+  const tsNum = parseInt(timestamp, 10);
+  if (isNaN(tsNum) || Math.abs(nowSec - tsNum) > 300) {
+    return reply.status(401).send({
+      error: "Unauthorized",
+      message: "Slack request timestamp too old or invalid",
+      statusCode: 401,
+    });
+  }
+
+  // Build the signature basestring
+  // raw-body plugin stores the raw request body string in request.rawBody.
+  // Fall back to re-serializing the parsed body if rawBody is empty.
+  const rawBodyStr = (request as FastifyRequest & { rawBody?: string }).rawBody;
+  const bodyString =
+    typeof rawBodyStr === "string" && rawBodyStr.length > 0
+      ? rawBodyStr
+      : JSON.stringify(request.body ?? "");
+
+  const sigBasestring = `v0:${timestamp}:${bodyString}`;
+
+  const hmac = crypto
+    .createHmac("sha256", signingSecret)
+    .update(sigBasestring, "utf8")
+    .digest("hex");
+
+  const computedSignature = `v0=${hmac}`;
+
+  // Timing-safe comparison
+  const sigBuffer = Buffer.from(signature, "utf8");
+  const computedBuffer = Buffer.from(computedSignature, "utf8");
+
+  if (
+    sigBuffer.length !== computedBuffer.length ||
+    !crypto.timingSafeEqual(sigBuffer, computedBuffer)
+  ) {
+    return reply.status(401).send({
+      error: "Unauthorized",
+      message: "Invalid Slack signature",
+      statusCode: 401,
+    });
+  }
+
+  // Signature is valid — no request.auth needed for Slack webhook routes
+}
+
+// ── Guard: requireMachineCredential (route-class d) ──────────────────────────
+//
+// Validates an HS256 JWT signed with MCP_SIGNING_SECRET.
+// Required claims:
+//   aud  === "dispatch-mcp"
+//   iss  === "dispatch"
+//   sub  — the operator's Clerk user id
+//   role — "admin" | "se"
+//   exp  — must not be expired
+//   iat  — issued-at
+//
+// On success: attaches { userId: claims.sub, role } to request.auth.
+// On failure (missing, wrong shape, wrong aud, wrong iss, bad sig, expired): 401.
+//
+// A Clerk session JWT presented here is rejected because it does NOT carry
+// aud === "dispatch-mcp". The two credential classes are NOT interchangeable.
+//
+// Revocation: rotate MCP_SIGNING_SECRET to invalidate all outstanding tokens.
+// Per-token revocation (mcp_token_revocations table) is explicitly deferred
+// to Phase 2 — not needed for the Phase-1 pilot with named operators.
+//
+// Test injection: call _setMachineVerifierForTest(fn) to replace the real
+// jwt.verify call; call _resetMachineVerifier() in afterEach to restore.
+
+export type MachineTokenClaims = {
+  sub: string;
+  role: string;
+  aud: string;
+  iss: string;
+  exp: number;
+  iat: number;
+};
+
+export type MachineVerifyFn = (
+  token: string,
+  secret: string
+) => MachineTokenClaims;
+
+let _machineVerify: MachineVerifyFn | null = null;
+
+function getMachineVerify(): MachineVerifyFn {
+  if (_machineVerify) return _machineVerify;
+  // Real implementation: synchronous HS256 verify via jsonwebtoken
+  return (token: string, secret: string): MachineTokenClaims => {
+    const decoded = jwt.verify(token, secret, {
+      algorithms: ["HS256"],
+    });
+    if (typeof decoded === "string") {
+      throw new Error("Unexpected string payload from jwt.verify");
+    }
+    return decoded as MachineTokenClaims;
+  };
+}
+
+/** Inject a mock verifier for tests — replaces the real jwt.verify call. */
+export function _setMachineVerifierForTest(mock: MachineVerifyFn): void {
+  _machineVerify = mock;
+}
+
+/** Reset to the real jwt.verify after tests. */
+export function _resetMachineVerifier(): void {
+  _machineVerify = null;
+}
+
+export async function requireMachineCredential(
+  request: FastifyRequest,
+  reply: FastifyReply
+): Promise<void> {
+  const signingSecret = process.env.MCP_SIGNING_SECRET;
+  if (!signingSecret) {
+    return reply.status(500).send({
+      error: "Internal Server Error",
+      message: "MCP_SIGNING_SECRET not configured",
+      statusCode: 500,
+    });
+  }
+
+  const authHeader = request.headers.authorization;
+  const token =
+    authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : undefined;
+
+  if (!token) {
+    return reply.status(401).send({
+      error: "Unauthorized",
+      message: "No machine credential provided",
+      statusCode: 401,
+    });
+  }
+
+  let claims: MachineTokenClaims;
+  try {
+    const verify = getMachineVerify();
+    claims = verify(token, signingSecret);
+  } catch {
+    return reply.status(401).send({
+      error: "Unauthorized",
+      message: "Invalid or expired machine credential",
+      statusCode: 401,
+    });
+  }
+
+  // Reject Clerk session JWTs or any token without the correct audience
+  if (claims.aud !== "dispatch-mcp") {
+    return reply.status(401).send({
+      error: "Unauthorized",
+      message: "Invalid machine credential: wrong audience",
+      statusCode: 401,
+    });
+  }
+
+  // Reject tokens from any issuer other than "dispatch"
+  if (claims.iss !== "dispatch") {
+    return reply.status(401).send({
+      error: "Unauthorized",
+      message: "Invalid machine credential: wrong issuer",
+      statusCode: 401,
+    });
+  }
+
+  // P2-E: validate required claim shapes explicitly.
+  // jwt.verify() checks exp/iss/aud/sig but does NOT enforce that sub is a
+  // non-empty string, that role is one of the allowed values, or that iat/exp
+  // are numbers. A token with sub: undefined or role: "superuser" would pass
+  // the jwt.verify check and reach the assignee at request.auth.userId.
+  if (typeof claims.sub !== "string" || claims.sub.length === 0) {
+    return reply.status(401).send({
+      error: "Unauthorized",
+      message: "Invalid machine credential: invalid claim shape (sub)",
+      statusCode: 401,
+    });
+  }
+
+  if (claims.role !== "admin" && claims.role !== "se") {
+    return reply.status(401).send({
+      error: "Unauthorized",
+      message: "Invalid machine credential: invalid claim shape (role)",
+      statusCode: 401,
+    });
+  }
+
+  if (typeof claims.exp !== "number") {
+    return reply.status(401).send({
+      error: "Unauthorized",
+      message: "Invalid machine credential: invalid claim shape (exp)",
+      statusCode: 401,
+    });
+  }
+
+  if (typeof claims.iat !== "number") {
+    return reply.status(401).send({
+      error: "Unauthorized",
+      message: "Invalid machine credential: invalid claim shape (iat)",
+      statusCode: 401,
+    });
+  }
+
+  const userId = claims.sub;
+  const role: DispatchRole = claims.role === "admin" ? "admin" : "se";
+
+  request.auth = { userId, role };
 }
 
 // ── Plugin registration ────────────────────────────────────────────────────────

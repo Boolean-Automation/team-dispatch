@@ -28,6 +28,7 @@ import {
   timestamp,
   varchar,
   uniqueIndex,
+  index,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
@@ -172,8 +173,16 @@ export const contacts = pgTable(
       .defaultNow(),
   },
   (t) => ({
-    emailUniq: uniqueIndex("contacts_email_uniq").on(t.email),
-    slackUserUniq: uniqueIndex("contacts_slack_user_uniq").on(t.slackUserId),
+    // Partial unique indexes matching 0000_init.sql:
+    //   WHERE email IS NOT NULL / WHERE slack_user_id IS NOT NULL
+    // Drizzle schema parity so a future drizzle-kit run cannot drop the partial
+    // predicates and replace them with non-partial indexes (P2-2).
+    emailUniq: uniqueIndex("contacts_email_uniq")
+      .on(t.email)
+      .where(sql`${t.email} IS NOT NULL`),
+    slackUserUniq: uniqueIndex("contacts_slack_user_uniq")
+      .on(t.slackUserId)
+      .where(sql`${t.slackUserId} IS NOT NULL`),
   })
 );
 
@@ -191,7 +200,10 @@ export const tickets = pgTable(
   "tickets",
   {
     id: uuid("id").defaultRandom().primaryKey(),
-    displayId: text("display_id").notNull().unique(),
+    displayId: text("display_id")
+      .notNull()
+      .unique()
+      .default(sql`'DSP-' || nextval('ticket_display_seq')::text`),
     // Generated as 'DSP-' || nextval('ticket_display_seq') in 0000_init.sql
     accountId: uuid("account_id")
       .notNull()
@@ -213,6 +225,12 @@ export const tickets = pgTable(
     resolvedAt: timestamp("resolved_at", { withTimezone: true }),
     slaDeadline: timestamp("sla_deadline", { withTimezone: true }),
     slaPaused: boolean("sla_paused").notNull().default(false),
+    // Stamped ONLY when the ticket transitions INTO 'waiting-client'.
+    // Cleared when the ticket transitions OUT of 'waiting-client'.
+    // The SLA timer reads this instead of updatedAt to measure the silence window
+    // so that unrelated ticket mutations (effort-bucket sets, audit appends) do
+    // not reset the follow-up clock. Added in migration 0005. (P2-3)
+    waitingClientSinceAt: timestamp("waiting_client_since_at", { withTimezone: true }),
     dismissedAt: timestamp("dismissed_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
@@ -222,10 +240,15 @@ export const tickets = pgTable(
       .defaultNow(),
   },
   (t) => ({
-    sourceDedup: uniqueIndex("tickets_source_dedup").on(
-      t.sourceChannelId,
-      t.sourceEventTs
-    ),
+    // Partial unique index matching 0000_init.sql:
+    // WHERE source_channel_id IS NOT NULL AND source_event_ts IS NOT NULL
+    // Drizzle uniqueIndex().where() encodes the partial predicate so a future
+    // drizzle-kit run cannot drift from the SQL definition (P2-J).
+    sourceDedup: uniqueIndex("tickets_source_dedup")
+      .on(t.sourceChannelId, t.sourceEventTs)
+      .where(
+        sql`${t.sourceChannelId} IS NOT NULL AND ${t.sourceEventTs} IS NOT NULL`
+      ),
   })
 );
 
@@ -236,24 +259,35 @@ export const tickets = pgTable(
 // spawn new Tickets (ADR-005 grain).
 // slack_ts: dedup key for thread-reply Messages (idempotency on re-delivery).
 
-export const messages = pgTable("messages", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  ticketId: uuid("ticket_id")
-    .notNull()
-    .references(() => tickets.id, { onDelete: "cascade" }),
-  direction: messageDirectionEnum("direction").notNull(),
-  authorKind: authorKindEnum("author_kind").notNull(),
-  authorRef: text("author_ref").notNull(),
-  // For client messages: Slack user id. For SE messages: Clerk user id.
-  body: text("body").notNull(),
-  slackTs: text("slack_ts"), // Dedup key for thread-reply re-delivery
-  postedAt: timestamp("posted_at", { withTimezone: true })
-    .notNull()
-    .defaultNow(),
-  createdAt: timestamp("created_at", { withTimezone: true })
-    .notNull()
-    .defaultNow(),
-});
+export const messages = pgTable(
+  "messages",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    ticketId: uuid("ticket_id")
+      .notNull()
+      .references(() => tickets.id, { onDelete: "cascade" }),
+    direction: messageDirectionEnum("direction").notNull(),
+    authorKind: authorKindEnum("author_kind").notNull(),
+    authorRef: text("author_ref").notNull(),
+    // For client messages: Slack user id. For SE messages: Clerk user id.
+    body: text("body").notNull(),
+    slackTs: text("slack_ts"), // Dedup key for thread-reply re-delivery
+    postedAt: timestamp("posted_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => ({
+    // Partial unique index matching 0000_init.sql:
+    // WHERE slack_ts IS NOT NULL
+    // Drizzle schema parity so a future drizzle-kit run cannot drift (P2-J).
+    slackTsUniq: uniqueIndex("messages_slack_ts_uniq")
+      .on(t.slackTs)
+      .where(sql`${t.slackTs} IS NOT NULL`),
+  })
+);
 
 // ── internal_thread_messages ──────────────────────────────────────────────────
 //
@@ -321,20 +355,36 @@ export const auditLog = pgTable("audit_log", {
 // While pending, tickets.assignee does NOT change (stays with original SE).
 // On accept → assignee moves to recipient. On reject → stays with original SE.
 // Schema defined here; SQL migration ships in Slice 7 (0004).
+//
+// The partial unique index "reassignments_one_pending_per_ticket" (0006) ensures
+// at most one 'pending' row per ticket_id at the DB level so the constraint holds
+// under READ COMMITTED concurrent inserts (P2-A).
 
-export const reassignments = pgTable("reassignments", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  ticketId: uuid("ticket_id")
-    .notNull()
-    .references(() => tickets.id, { onDelete: "cascade" }),
-  proposer: text("proposer").notNull(), // Clerk user id
-  recipient: text("recipient").notNull(), // Clerk user id
-  status: reassignmentStatusEnum("status").notNull().default("pending"),
-  createdAt: timestamp("created_at", { withTimezone: true })
-    .notNull()
-    .defaultNow(),
-  resolvedAt: timestamp("resolved_at", { withTimezone: true }),
-});
+export const reassignments = pgTable(
+  "reassignments",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    ticketId: uuid("ticket_id")
+      .notNull()
+      .references(() => tickets.id, { onDelete: "cascade" }),
+    proposer: text("proposer").notNull(), // Clerk user id
+    recipient: text("recipient").notNull(), // Clerk user id
+    status: reassignmentStatusEnum("status").notNull().default("pending"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+  },
+  (t) => ({
+    // Partial unique index matching 0006_reassignment_one_pending.sql:
+    // WHERE status = 'pending'
+    // Drizzle schema parity so a future drizzle-kit run cannot drift from the
+    // SQL definition — same pattern as contacts/tickets/messages (P2-A).
+    onePendingPerTicket: uniqueIndex("reassignments_one_pending_per_ticket")
+      .on(t.ticketId)
+      .where(sql`${t.status} = 'pending'`),
+  })
+);
 
 // ── reinforcements ─────────────────────────────────────────────────────────────
 //
