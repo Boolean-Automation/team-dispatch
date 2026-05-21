@@ -27,6 +27,7 @@
  */
 
 import { createServer } from "node:https";
+import { request as httpRequest } from "node:http";
 import { readFile, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join, extname, dirname, resolve } from "node:path";
@@ -41,6 +42,15 @@ const CERT_DIR = join(WEB_ROOT, ".https-cert");
 const CERT_PATH = join(CERT_DIR, "localhost-cert.pem");
 const KEY_PATH = join(CERT_DIR, "localhost-key.pem");
 const PORT = Number(process.argv[2] ?? 8443);
+
+/**
+ * Backend the `/api/*` paths proxy to. The deployed app serves web + api from
+ * one origin; locally the api runs as a separate process. The web app's
+ * api-client uses same-origin paths (`API_BASE = ""`), so this HTTPS harness
+ * must forward `/api/*` to the api the same way the Vite dev server does —
+ * otherwise the production-origin capture cannot mint a Companion token.
+ */
+const API_TARGET = process.env.API_TARGET ?? "http://127.0.0.1:3000";
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -89,6 +99,33 @@ async function main() {
       key: await readFile(KEY_PATH),
     },
     async (req, res) => {
+      // `/api/*` → proxy to the api process (same shape as the Vite dev proxy).
+      // This is what lets the production-like HTTPS origin mint a Companion
+      // session token; without it the same-origin `POST /api/companion/sessions`
+      // would 404 against the static SPA server.
+      if ((req.url ?? "").startsWith("/api/")) {
+        const target = new URL(API_TARGET);
+        const proxied = httpRequest(
+          {
+            hostname: target.hostname,
+            port: target.port,
+            path: req.url,
+            method: req.method,
+            headers: { ...req.headers, host: target.host },
+          },
+          (upstream) => {
+            res.writeHead(upstream.statusCode ?? 502, upstream.headers);
+            upstream.pipe(res);
+          }
+        );
+        proxied.on("error", () => {
+          res.writeHead(502, { "Content-Type": "text/plain" });
+          res.end("Bad Gateway — api unreachable");
+        });
+        req.pipe(proxied);
+        return;
+      }
+
       // SPA static serve with index.html fallback for client routes.
       const urlPath = (req.url ?? "/").split("?")[0];
       let filePath = join(DIST_DIR, urlPath === "/" ? "index.html" : urlPath);

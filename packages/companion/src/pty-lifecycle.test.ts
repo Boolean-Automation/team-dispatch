@@ -288,6 +288,81 @@ describe("Companion shutdown — every session torn down", () => {
   });
 });
 
+// ── /healthz discovery endpoint — CORS for the cross-origin probe ────────────
+//
+// The web app's discovery probe is a cross-origin `fetch` from the dispatch
+// origin to `http://127.0.0.1:<port>/healthz`. The browser enforces CORS on
+// it. Slice 4 integration surfaced that without an explicit ACAO header the
+// browser blocks the probe and the panel wrongly shows "Companion not
+// detected". `/healthz` answers CORS for the SAME strict Origin allowlist the
+// WS upgrade pins against — and ONLY that allowlist.
+
+describe("/healthz — discovery endpoint CORS (Slice 4 remediation)", () => {
+  async function withServer(
+    fn: (base: string) => Promise<void>
+  ): Promise<void> {
+    const { buildCompanionServer } = await import("./main.js");
+    const server = buildCompanionServer({
+      port: 0,
+      host: "127.0.0.1",
+      tokenSecret: "x".repeat(32),
+      knowledgeRoot: process.cwd(),
+      allowedOrigins: ["http://localhost:5173", "https://dispatch.paintos.app"],
+    });
+    await new Promise<void>((resolve) =>
+      server.httpServer.listen(0, "127.0.0.1", resolve)
+    );
+    const addr = server.httpServer.address();
+    const port = typeof addr === "object" && addr ? addr.port : 0;
+    try {
+      await fn(`http://127.0.0.1:${port}`);
+    } finally {
+      server.closeAll();
+      await new Promise<void>((resolve) => server.httpServer.close(() => resolve()));
+    }
+  }
+
+  it("a GET from an allowlisted Origin gets Access-Control-Allow-Origin", async () => {
+    await withServer(async (base) => {
+      const res = await fetch(`${base}/healthz`, {
+        headers: { Origin: "http://localhost:5173" },
+      });
+      expect(res.status).toBe(200);
+      expect(res.headers.get("access-control-allow-origin")).toBe(
+        "http://localhost:5173"
+      );
+      expect(res.headers.get("cache-control")).toBe("no-store");
+      const body = (await res.json()) as { ok: boolean };
+      expect(body.ok).toBe(true);
+    });
+  });
+
+  it("an OPTIONS preflight from an allowlisted Origin returns 204 with CORS", async () => {
+    await withServer(async (base) => {
+      const res = await fetch(`${base}/healthz`, {
+        method: "OPTIONS",
+        headers: { Origin: "https://dispatch.paintos.app" },
+      });
+      expect(res.status).toBe(204);
+      expect(res.headers.get("access-control-allow-origin")).toBe(
+        "https://dispatch.paintos.app"
+      );
+    });
+  });
+
+  it("a GET from a non-allowlisted Origin gets NO ACAO header", async () => {
+    await withServer(async (base) => {
+      const res = await fetch(`${base}/healthz`, {
+        headers: { Origin: "https://evil.example.com" },
+      });
+      // The endpoint still answers (it carries no secret), but with no ACAO
+      // the browser blocks the cross-origin read — discovery is not opened up.
+      expect(res.status).toBe(200);
+      expect(res.headers.get("access-control-allow-origin")).toBeNull();
+    });
+  });
+});
+
 // ── node-pty version sanity — the prototype's load-bearing finding ───────────
 
 describe("node-pty pinned version", () => {

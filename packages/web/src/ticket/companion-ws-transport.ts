@@ -44,11 +44,28 @@ export type HealthProbeFn = (port: number) => Promise<boolean>;
 /** A WebSocket factory — injected so tests need no real socket. */
 export type SocketFactory = (url: string) => WebSocket;
 
+/**
+ * Optional Ticket metadata injected into the spawned `claude` session as
+ * opening context (OQ-S2). The Companion reads these from the WS URL query
+ * params and builds the context preamble. `ticketId` is always carried (it is
+ * the token scope); these add the human-readable fields.
+ */
+export interface CompanionSessionMeta {
+  /** Ticket status — e.g. "new", "on-you". */
+  status?: string;
+  /** Client slug, when the panel has the Account loaded. */
+  clientSlug?: string;
+  /** Ticket title, when available. */
+  title?: string;
+}
+
 export interface CompanionWsTransportOptions {
   /** The ticket the session is for — scopes the minted token. */
   ticketId: string;
   /** The dispatch web app origin — audience-binds the token. */
   origin: string;
+  /** Optional Ticket metadata for the context-injection preamble (A15). */
+  meta?: CompanionSessionMeta;
   /** Token mint. Defaults to POST /api/companion/sessions via api-client. */
   mintToken?: MintTokenFn;
   /** Health probe. Defaults to a fetch of GET /healthz. */
@@ -88,6 +105,7 @@ export class CompanionWsTransport implements TerminalTransport {
   private readonly opts: Required<
     Pick<CompanionWsTransportOptions, "ticketId" | "origin">
   > & {
+    meta: CompanionSessionMeta;
     mintToken: MintTokenFn;
     healthProbe: HealthProbeFn;
     socketFactory: SocketFactory;
@@ -102,6 +120,7 @@ export class CompanionWsTransport implements TerminalTransport {
     this.opts = {
       ticketId: options.ticketId,
       origin: options.origin,
+      meta: options.meta ?? {},
       mintToken: options.mintToken ?? defaultMintToken,
       healthProbe: options.healthProbe ?? defaultHealthProbe,
       socketFactory: options.socketFactory ?? ((url) => new WebSocket(url)),
@@ -163,11 +182,16 @@ export class CompanionWsTransport implements TerminalTransport {
     }
 
     // Step 3 — open the loopback WebSocket, scoped by token + ticket + session.
+    // The optional Ticket metadata rides as query params — the Companion reads
+    // them into the context-injection preamble (A15 / OQ-S2).
     const params = new URLSearchParams({
       token: mint.token,
       ticket: this.opts.ticketId,
       session: mint.sessionId,
     });
+    if (this.opts.meta.status) params.set("status", this.opts.meta.status);
+    if (this.opts.meta.clientSlug) params.set("clientSlug", this.opts.meta.clientSlug);
+    if (this.opts.meta.title) params.set("title", this.opts.meta.title);
     const url = `ws://127.0.0.1:${port}/?${params.toString()}`;
 
     let ws: WebSocket;

@@ -32,15 +32,45 @@ import { COMPANION_VERSION } from "./protocol.js";
  */
 export function buildCompanionServer(config = loadConfig()) {
   const httpServer = createServer((req, res) => {
-    // Minimal discovery endpoint. NO sensitive data; no-store.
-    if (req.method === "GET" && req.url && req.url.split("?")[0] === "/healthz") {
-      res.writeHead(200, {
-        "Content-Type": "application/json",
-        "Cache-Control": "no-store",
-      });
-      res.end(JSON.stringify({ ok: true, companion: COMPANION_VERSION }));
-      return;
+    const pathOnly = (req.url ?? "").split("?")[0];
+
+    // The discovery probe (`GET /healthz`) is a cross-origin `fetch` from the
+    // dispatch web app — the browser enforces CORS on it (unlike the WS
+    // `upgrade`, which carries the Origin pin instead). Without an explicit
+    // `Access-Control-Allow-Origin` the browser blocks the probe and the panel
+    // wrongly shows "Companion not detected". `/healthz` is intentionally a
+    // browser-facing endpoint (spec §4.5) — so it answers CORS for the SAME
+    // strict exact-match Origin allowlist the WS upgrade pins against. An
+    // Origin not on the allowlist gets no ACAO header (the browser then blocks
+    // it) — discovery is not opened to arbitrary origins.
+    if (pathOnly === "/healthz") {
+      const origin = req.headers.origin;
+      const corsHeaders: Record<string, string> = { "Vary": "Origin" };
+      if (typeof origin === "string" && config.allowedOrigins.includes(origin)) {
+        corsHeaders["Access-Control-Allow-Origin"] = origin;
+        corsHeaders["Access-Control-Allow-Methods"] = "GET, OPTIONS";
+      }
+
+      // CORS preflight — a browser may send OPTIONS before the GET.
+      if (req.method === "OPTIONS") {
+        res.writeHead(204, { ...corsHeaders, "Cache-Control": "no-store" });
+        res.end();
+        return;
+      }
+
+      if (req.method === "GET") {
+        // Minimal discovery payload. NO sensitive data (no token, no path,
+        // no env); no-store.
+        res.writeHead(200, {
+          ...corsHeaders,
+          "Content-Type": "application/json",
+          "Cache-Control": "no-store",
+        });
+        res.end(JSON.stringify({ ok: true, companion: COMPANION_VERSION }));
+        return;
+      }
     }
+
     res.writeHead(426, { "Content-Type": "text/plain" });
     res.end("Upgrade Required");
   });

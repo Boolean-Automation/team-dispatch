@@ -17,13 +17,18 @@ import type {
   TransportStatus,
 } from "./terminal-transport.js";
 import type { ClientFrame, ServerFrame } from "./companion-protocol.js";
-import { CompanionWsTransport } from "./companion-ws-transport.js";
+import {
+  CompanionWsTransport,
+  type CompanionSessionMeta,
+} from "./companion-ws-transport.js";
 
 export interface UseCompanionOptions {
   /** The ticket the session is for. */
   ticketId: string;
   /** The dispatch web app origin (audience binding). */
   origin?: string;
+  /** Ticket metadata for the context-injection preamble (A15 / OQ-S2). */
+  meta?: CompanionSessionMeta;
   /**
    * The transport to use. Defaults to the real `CompanionWsTransport`.
    * The spike substitutes `FallbackTransportStub` here to prove the seam —
@@ -50,6 +55,11 @@ export interface UseCompanionResult {
 export function useCompanion(opts: UseCompanionOptions): UseCompanionResult {
   const { ticketId, enabled = true } = opts;
   const origin = opts.origin ?? window.location.origin;
+  // Destructure meta to primitives so the effect dep list stays stable
+  // (an object literal would rebuild the transport on every render).
+  const metaStatus = opts.meta?.status;
+  const metaClientSlug = opts.meta?.clientSlug;
+  const metaTitle = opts.meta?.title;
 
   const [status, setStatus] = useState<TransportStatus>({ state: "idle" });
   const [retryNonce, setRetryNonce] = useState(0);
@@ -69,7 +79,16 @@ export function useCompanion(opts: UseCompanionOptions): UseCompanionResult {
     }
 
     const transport: TerminalTransport =
-      injectedTransport ?? new CompanionWsTransport({ ticketId, origin });
+      injectedTransport ??
+      new CompanionWsTransport({
+        ticketId,
+        origin,
+        meta: {
+          status: metaStatus,
+          clientSlug: metaClientSlug,
+          title: metaTitle,
+        },
+      });
     transportRef.current = transport;
 
     transport.connect({
@@ -84,7 +103,16 @@ export function useCompanion(opts: UseCompanionOptions): UseCompanionResult {
       transportRef.current = null;
     };
     // retryNonce is intentionally a dep — bumping it rebuilds the transport.
-  }, [enabled, ticketId, origin, injectedTransport, retryNonce]);
+  }, [
+    enabled,
+    ticketId,
+    origin,
+    metaStatus,
+    metaClientSlug,
+    metaTitle,
+    injectedTransport,
+    retryNonce,
+  ]);
 
   const send = useCallback((frame: ClientFrame) => {
     transportRef.current?.send(frame);

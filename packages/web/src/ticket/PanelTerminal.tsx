@@ -61,7 +61,14 @@ const LIVE_STATES: ReadonlySet<ConnectionState> = new Set<ConnectionState>([
 ]);
 
 export function PanelTerminal({ ticket, transport }: PanelTerminalProps) {
-  const companion = useCompanion({ ticketId: ticket.displayId, transport });
+  // Pass the Ticket status into the context-injection preamble (A15). The
+  // client slug needs the Account object — `RightPanel` does not thread it
+  // today; that is a Phase 2 polish item recorded in the verdict doc.
+  const companion = useCompanion({
+    ticketId: ticket.displayId,
+    meta: { status: ticket.status },
+    transport,
+  });
   const { status } = companion;
 
   const xtermHostRef = useRef<HTMLDivElement | null>(null);

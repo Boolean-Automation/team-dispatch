@@ -10,6 +10,9 @@ node_modules/
 dist/
 *.tsbuildinfo
 
+# Local HTTPS dev cert (self-signed; serve-https.mjs generates it — never commit a private key)
+.https-cert/
+
 # Env files (never commit secrets)
 .env
 .env.local
