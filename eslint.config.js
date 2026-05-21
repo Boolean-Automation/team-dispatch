@@ -42,6 +42,20 @@ export default [
                 "web must not import @dispatch/db directly — use the API client instead.",
             },
             {
+              group: ["@dispatch/companion", "@dispatch/companion/*"],
+              message:
+                "web must not import @dispatch/companion — talk to the Companion only over the WebSocket; re-declare protocol types locally.",
+            },
+            {
+              group: [
+                "../../companion/**",
+                "../../../companion/**",
+                "../../../../companion/**",
+              ],
+              message:
+                "web must not reach into the Companion package via relative path — talk to it over the WebSocket only.",
+            },
+            {
               group: ["../../core/**", "../../../core/**", "../../../../core/**"],
               message:
                 "web must not reach into core via relative path — use the API client instead.",
