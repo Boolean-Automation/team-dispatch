@@ -21,7 +21,7 @@ import React, { forwardRef, useImperativeHandle } from "react";
 import type { Terminal as XTerm } from "@xterm/xterm";
 import type { SearchAddon } from "@xterm/addon-search";
 
-import { useTerminal } from "./use-terminal.js";
+import { useTerminal, type ActiveRenderer } from "./use-terminal.js";
 import type { ThemeName } from "./themes.js";
 import type { TerminalSubscribeTransport } from "./transport-contract.js";
 
@@ -49,6 +49,13 @@ export interface TerminalHandle {
   term: XTerm | null;
   /** The search addon — drives S3's find overlay. */
   searchAddon: SearchAddon | null;
+  /**
+   * Which renderer tier is currently driving cell paints — `webgl` on mount,
+   * flips to `canvas` (or `dom`) after a WebGL context-loss event. Tracked by
+   * `useTerminal`; exposed here so the panel's DEV-only window helper can
+   * surface the runtime renderer for AC A6 e2e capture.
+   */
+  activeRenderer: ActiveRenderer;
   /** Call FitAddon.fit() — used after drag-resize finishes. */
   fit(): void;
   /** Convenience: SearchAddon.findNext on the active search. */
@@ -68,20 +75,22 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
     { ptyId, ticketId, transport, themeName, fontSize, scrollback, className }: TerminalProps,
     ref
   ) {
-    const { containerRef, term, searchAddon, fit } = useTerminal({
-      ptyId,
-      ticketId,
-      transport,
-      themeName,
-      fontSize,
-      scrollback,
-    });
+    const { containerRef, term, searchAddon, activeRenderer, fit } =
+      useTerminal({
+        ptyId,
+        ticketId,
+        transport,
+        themeName,
+        fontSize,
+        scrollback,
+      });
 
     useImperativeHandle(
       ref,
       (): TerminalHandle => ({
         term,
         searchAddon,
+        activeRenderer,
         fit,
         findNext(query: string) {
           try {
@@ -98,7 +107,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
           }
         },
       }),
-      [term, searchAddon, fit]
+      [term, searchAddon, activeRenderer, fit]
     );
 
     return (

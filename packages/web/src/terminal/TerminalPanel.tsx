@@ -234,6 +234,15 @@ export function TerminalPanel({
   // Gated by import.meta.env.DEV so it disappears in prod builds. The
   // openExtraPty handle bypasses the launcher; closeActivePty drives the
   // useActivePty close path the same way a future close affordance would.
+  //
+  // e2e-retry — `getActiveRenderer()` exposes `useTerminal`'s `activeRenderer`
+  // state so the AC A6 WebGL→Canvas runtime-flip Playwright spec can observe
+  // the renderer tier without DOM-counting. Reads through termRef on every
+  // call so it sees the post-flip value (xterm's `onContextLoss` runs
+  // synchronously inside the WebglAddon's listener; React re-renders
+  // `<Terminal>` with the new `activeRenderer`, which propagates to this
+  // imperative-handle ref). Returns `'dom'` when the panel is in `.term-fail`
+  // (no live `<Terminal>` mounted yet).
   useEffect(() => {
     if (!import.meta.env.DEV) return;
     const helper = {
@@ -242,6 +251,9 @@ export function TerminalPanel({
       },
       closeActivePty(): void {
         if (activePtyId) activePty.closePty(activePtyId);
+      },
+      getActiveRenderer(): "webgl" | "canvas" | "dom" {
+        return termRef.current?.activeRenderer ?? "dom";
       },
       get activePtyId(): string | null {
         return activePtyId;

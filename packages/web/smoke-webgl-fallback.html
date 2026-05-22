@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>dispatch · A6 WebGL fallback smoke (dev-only)</title>
+    <!--
+      DEV-ONLY smoke entry. Mounts the production <Terminal> component against
+      a minimal mock transport so the AC A6 Playwright spec can drive a real
+      WebGL→Canvas runtime flip without a Companion/WebSocket. Not registered
+      in vite.config.ts `build.rollupOptions.input`, so the production build
+      does NOT emit this page. See `src/smoke/webgl-fallback-smoke.tsx` for
+      why this lives outside `/src/main.tsx`.
+    -->
+    <link
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        background: #0e0f12;
+        min-height: 100vh;
+      }
+    </style>
+  </head>
+  <body data-density="compact">
+    <div id="smoke-root"></div>
+    <script type="module" src="/src/smoke/webgl-fallback-smoke.tsx"></script>
+  </body>
+</html>
