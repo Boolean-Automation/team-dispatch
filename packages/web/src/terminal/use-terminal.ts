@@ -16,6 +16,7 @@ import { SerializeAddon } from "@xterm/addon-serialize";
 import { SearchAddon } from "@xterm/addon-search";
 import { LigaturesAddon } from "@xterm/addon-ligatures";
 import { WebglAddon } from "@xterm/addon-webgl";
+import { CanvasAddon } from "@xterm/addon-canvas";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 
@@ -45,6 +46,16 @@ export interface UseTerminalOptions {
   writeOverride?: (term: Terminal, bytes: Uint8Array | string) => void;
 }
 
+/**
+ * Which renderer is currently driving cell paints. Phase 2 / AC A6:
+ *   - "webgl" — `@xterm/addon-webgl` is loaded (the default, perf path).
+ *   - "canvas" — WebGL context was lost → addon disposed → `@xterm/addon-canvas`
+ *     loaded as the fallback. Cell content + buffer state survive the swap.
+ *   - "dom" — neither addon active (both failed at load time). xterm's
+ *     built-in DOM-row renderer takes over — perf-degraded but functional.
+ */
+export type ActiveRenderer = "webgl" | "canvas" | "dom";
+
 /** What the hook returns. The component uses `containerRef` to host xterm. */
 export interface UseTerminalResult {
   /** Attach this to the DOM element xterm should mount into. */
@@ -55,6 +66,8 @@ export interface UseTerminalResult {
   searchAddon: SearchAddon | null;
   /** The fit addon — exposed for the resize panel (S3). */
   fitAddon: FitAddon | null;
+  /** Which renderer is active right now. Flips webgl → canvas on context-loss. */
+  activeRenderer: ActiveRenderer;
   /** Convenience: call FitAddon.fit() (no-op if not yet mounted). */
   fit: () => void;
 }
@@ -147,7 +160,13 @@ export function useTerminal(opts: UseTerminalOptions): UseTerminalResult {
     term: Terminal | null;
     searchAddon: SearchAddon | null;
     fitAddon: FitAddon | null;
-  }>({ term: null, searchAddon: null, fitAddon: null });
+    activeRenderer: ActiveRenderer;
+  }>({
+    term: null,
+    searchAddon: null,
+    fitAddon: null,
+    activeRenderer: "dom",
+  });
 
   const containerEl = useRef<HTMLDivElement | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -252,21 +271,59 @@ export function useTerminal(opts: UseTerminalOptions): UseTerminalResult {
     term.open(host);
 
     // 7. WebglAddon LAST — renderer takes the cell content as authored above.
+    //
+    // AC A6 — WebGL context-loss → Canvas fallback. When the GPU loses our
+    // WebGL context (driver crash, tab backgrounded too long, deliberate
+    // WEBGL_lose_context.loseContext() in a smoke harness), the addon emits
+    // `onContextLoss`. We dispose the WebGL addon then load `CanvasAddon`
+    // in its place — xterm's buffer survives the swap (the buffer lives in
+    // core, not the renderer), so the user sees no content loss, only a
+    // brief perf-tier downgrade. If even the Canvas addon fails to load,
+    // xterm's built-in DOM-row renderer paints — functional, slower.
     let webglError: unknown = null;
+    let activeRenderer: ActiveRenderer = "dom";
     try {
       const webgl = new WebglAddon();
-      // Context-loss handler: detach the addon; xterm falls back to DOM renderer.
       webgl.onContextLoss(() => {
         try {
           webgl.dispose();
         } catch {
           /* already disposed */
         }
+        // Load the Canvas fallback. Wrapped because addon construction can
+        // throw under jsdom; if it does, we fall through to the DOM renderer.
+        try {
+          const canvas = new CanvasAddon();
+          term.loadAddon(canvas);
+          setInstances((prev) =>
+            prev.term === term
+              ? { ...prev, activeRenderer: "canvas" }
+              : prev
+          );
+        } catch (err) {
+          console.warn(
+            "[useTerminal] CanvasAddon failed to load after WebGL context loss — falling back to DOM renderer",
+            err
+          );
+          setInstances((prev) =>
+            prev.term === term ? { ...prev, activeRenderer: "dom" } : prev
+          );
+        }
       });
       term.loadAddon(webgl);
+      activeRenderer = "webgl";
     } catch (err) {
       webglError = err;
-      // Continue with the DOM renderer — xterm transparently falls back.
+      // WebGL didn't load (no GPU, jsdom). Try the Canvas tier directly so
+      // we don't ship an SE the slowest possible renderer by default.
+      try {
+        const canvas = new CanvasAddon();
+        term.loadAddon(canvas);
+        activeRenderer = "canvas";
+      } catch {
+        // Canvas also unavailable — xterm's DOM renderer is the floor.
+        activeRenderer = "dom";
+      }
     }
 
     // 8. FitAddon — for the resize panel (S3).
@@ -282,7 +339,7 @@ export function useTerminal(opts: UseTerminalOptions): UseTerminalResult {
     // Publish instances exactly once — consumers (Terminal component) will
     // re-render with the populated handle. The effect does NOT re-fire because
     // the only effect dep is `tick`, which `setInstances` does not modify.
-    setInstances({ term, searchAddon, fitAddon: fit });
+    setInstances({ term, searchAddon, fitAddon: fit, activeRenderer });
 
     // 9. Replay scrollback BEFORE subscribing. We want the SE to see history
     // immediately on mount; live frames that arrive during the read are
@@ -376,7 +433,12 @@ export function useTerminal(opts: UseTerminalOptions): UseTerminalResult {
         /* already disposed */
       }
       fitRef.current = null;
-      setInstances({ term: null, searchAddon: null, fitAddon: null });
+      setInstances({
+        term: null,
+        searchAddon: null,
+        fitAddon: null,
+        activeRenderer: "dom",
+      });
     };
     // tick triggers the effect when the container ref attaches; the other
     // values come from optsRef so the hook doesn't re-mount on prop changes.
@@ -434,6 +496,7 @@ export function useTerminal(opts: UseTerminalOptions): UseTerminalResult {
     term: instances.term,
     searchAddon: instances.searchAddon,
     fitAddon: instances.fitAddon,
+    activeRenderer: instances.activeRenderer,
     fit,
   };
 }
