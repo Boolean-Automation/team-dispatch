@@ -1,5 +1,6 @@
 import tsParser from "@typescript-eslint/parser";
 import tsPlugin from "@typescript-eslint/eslint-plugin";
+import reactPlugin from "eslint-plugin-react";
 
 /** @type {import("eslint").Linter.FlatConfig[]} */
 export default [
@@ -24,8 +25,38 @@ export default [
     },
     plugins: {
       "@typescript-eslint": tsPlugin,
+      react: reactPlugin,
     },
     rules: {
+      // Slice 0 — SPA-wide security lint rules. CSP is defense-in-depth;
+      // these rules close the source-code sinks that CSP would otherwise have
+      // to catch at runtime. Any violation here fails CI before merge.
+      "react/no-danger": "error",
+      "no-eval": "error",
+      "no-implied-eval": "error",
+      "no-new-func": "error",
+      "no-restricted-properties": [
+        "error",
+        {
+          object: "document",
+          property: "write",
+          message:
+            "document.write is banned — it can execute attacker-controlled HTML.",
+        },
+        {
+          property: "innerHTML",
+          message:
+            "innerHTML is banned outside explicit waivers — use textContent or React state.",
+        },
+        {
+          property: "outerHTML",
+          message: "outerHTML is banned — see innerHTML.",
+        },
+        {
+          property: "insertAdjacentHTML",
+          message: "insertAdjacentHTML is banned — see innerHTML.",
+        },
+      ],
       // FIX 9: headless-core boundary — web must never import core or db directly
       "no-restricted-imports": [
         "error",

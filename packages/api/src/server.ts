@@ -12,6 +12,8 @@
 
 import Fastify from "fastify";
 import errorHandlerPlugin from "./plugins/error-handler.js";
+import helmetPlugin from "./plugins/helmet.js";
+import cspPlugin from "./plugins/csp.js";
 import rawBodyPlugin from "./plugins/raw-body.js";
 import clerkAuthPlugin from "./plugins/clerk-auth.js";
 import dbPlugin from "./plugins/db.js";
@@ -50,6 +52,14 @@ export async function buildServer(opts: BuildServerOptions = {}) {
 
   // ── Plugins ──────────────────────────────────────────────────────────────────
   await fastify.register(errorHandlerPlugin);
+  // Slice 0: SPA-wide security headers must land BEFORE any route or static
+  // handler. helmet first (Strict-Transport-Security, X-Content-Type-Options,
+  // Cross-Origin-Opener-Policy, …); csp second (Content-Security-Policy +
+  // nonce minting + onSend HTML rewrite). The csp plugin sets the header on
+  // EVERY response — including this server's API JSON responses — which is
+  // intentional defense-in-depth.
+  await fastify.register(helmetPlugin);
+  await fastify.register(cspPlugin);
   // raw-body must be registered BEFORE clerk-auth and routes that need rawBody
   await fastify.register(rawBodyPlugin);
   await fastify.register(clerkAuthPlugin);
