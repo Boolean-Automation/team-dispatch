@@ -134,21 +134,43 @@ function injectNonces(html: string, nonce: string): string {
 
   // 2. Attach nonce="…" to every <script …> opening tag that does not
   //    already carry a nonce attribute. Skip </script> closers.
+  //
+  // Codex R2-P3 fix — handle BOTH self-closing (`<script src="..." />`) and
+  // non-self-closing forms. The optional trailing `/` is captured as the
+  // self-close marker; nonce is inserted BEFORE it so the result remains
+  // well-formed HTML. Note: `<script />` is browser-invalid (the spec
+  // requires a closing tag), but if a serializer emits it, our rewrite must
+  // still produce well-formed output rather than `<script ... / nonce="…">`.
   rewritten = rewritten.replace(
-    /<script\b([^>]*)>/gi,
-    (_match, attrs: string) => {
-      if (/\bnonce=/.test(attrs)) return `<script${attrs}>`;
-      return `<script${attrs} nonce="${nonce}">`;
+    /<script\b([^>]*?)(\s*\/)?>/gi,
+    (_match, attrs: string, selfClose: string | undefined) => {
+      const closer = selfClose ?? "";
+      if (/\bnonce=/.test(attrs)) return `<script${attrs}${closer}>`;
+      // Trim trailing whitespace from attrs so we produce `<script ... nonce="x" />`
+      // not `<script ...  nonce="x" />` when there were already a leading space
+      // before the `/`. The original (closer) chunk owns the leading whitespace.
+      return `<script${attrs} nonce="${nonce}"${closer}>`;
     }
   );
 
   // 3. Attach nonce="…" to every <link rel="stylesheet" …> tag.
+  //
+  // Codex R2-P3 fix — same self-closing handling as <script>. Real-world
+  // self-closing case: Google Fonts stylesheet links bundled into the SPA
+  // (`<link rel="stylesheet" href="..." />`). Pre-fix the rewrite produced
+  // `<link rel="stylesheet" href="..." / nonce="...">` — malformed HTML.
+  // Patterns handled:
+  //   <link rel="stylesheet" href="..." />            (self-closing)
+  //   <link rel="stylesheet" href="...">              (non-self-closing)
+  //   <link rel="stylesheet" href="..." crossorigin>  (extra attrs)
+  //   <link rel="stylesheet" href="..." crossorigin/> (extra attrs, self-close)
   rewritten = rewritten.replace(
-    /<link\b([^>]*)>/gi,
-    (match, attrs: string) => {
+    /<link\b([^>]*?)(\s*\/)?>/gi,
+    (match, attrs: string, selfClose: string | undefined) => {
       if (!/rel=["']?stylesheet["']?/i.test(attrs)) return match;
       if (/\bnonce=/.test(attrs)) return match;
-      return `<link${attrs} nonce="${nonce}">`;
+      const closer = selfClose ?? "";
+      return `<link${attrs} nonce="${nonce}"${closer}>`;
     }
   );
 

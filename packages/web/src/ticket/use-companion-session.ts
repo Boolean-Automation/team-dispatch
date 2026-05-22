@@ -82,11 +82,36 @@ export function useCompanion(opts: UseCompanionOptions): UseCompanionResult {
   const transportRef = useRef<TerminalTransport | null>(null);
 
   // Codex post-qa P2 fix — track the most-recently-active pty_id for this
-  // (hook instance, ticket). Captured AFTER each successful pty.open so the
-  // NEXT epoch flip can rekey scrollback forward from old → new. Initialized
-  // null so the first epoch (lastEpoch === undefined path) is a no-op rekey
-  // (there is no old pty to copy from).
+  // (hook instance, ticket). Captured from EVERY forwarded `pty.opened` frame
+  // so the NEXT epoch flip can rekey scrollback forward from old → new.
+  // Initialized null so the first epoch (lastEpochRef.current === null path)
+  // is a no-op rekey (there is no old pty to copy from).
+  //
+  // Codex R2-P2 fix — updated from EVERY forwarded `pty.opened`, not just the
+  // auto-open .then(). This covers (a) auto-opens, (b) manual openPty() calls
+  // via activePty, and (c) multi-PTY scenarios (S6) where the most recent
+  // active PTY is what restart-rekey should target.
   const prevActivePtyIdRef = useRef<string | null>(null);
+
+  // Codex R2-P2 fix — `lastEpoch` was effect-local (a `let` inside the
+  // useEffect callback). When `companion.retry()` bumps `retryNonce`, useMemo
+  // rebuilds the transport, which re-runs the effect, which RESETS lastEpoch
+  // to undefined. The first `connected` status on the new transport is then
+  // treated as a first-epoch case and `pendingRekey` is never armed — the
+  // scrollback forward-rekey never fires in production retry flows.
+  //
+  // Persist as a ref across transport lifetimes. Reset to null ONLY when
+  // `ticketId` changes (a different ticket is a fresh slate — no rekey from
+  // a different ticket's scrollback). Transport rebuilds via `retryNonce` do
+  // NOT reset this ref.
+  const lastEpochRef = useRef<number | null>(null);
+
+  // Reset lastEpochRef when ticket changes — a different ticket's scrollback
+  // is not eligible for rekey-forward into a fresh PTY.
+  useEffect(() => {
+    lastEpochRef.current = null;
+    prevActivePtyIdRef.current = null;
+  }, [ticketId]);
 
   const injectedTransport = opts.transport;
 
@@ -124,7 +149,6 @@ export function useCompanion(opts: UseCompanionOptions): UseCompanionResult {
     transportRef.current = transport;
 
     let cancelled = false;
-    let lastEpoch: number | undefined;
 
     // Codex post-qa P2 fix — Companion-restart rekey-forward state.
     //
@@ -136,6 +160,10 @@ export function useCompanion(opts: UseCompanionOptions): UseCompanionResult {
     // Terminal doesn't re-mount + call `getRecent` — until the rekeyed bytes
     // are committed to IDB. Subscribers see a slightly delayed but ordered
     // frame stream.
+    //
+    // Codex R2-P2 — `pendingRekey` is effect-local. That's fine: each new
+    // transport (via retryNonce) re-runs the effect, sees the new epoch
+    // (different from the persisted `lastEpochRef.current`), and re-arms.
     let pendingRekey: { oldPtyId: string } | null = null;
 
     transport.connect({
@@ -146,8 +174,13 @@ export function useCompanion(opts: UseCompanionOptions): UseCompanionResult {
         // re-open: Phase 2 no-resume binding.
         if (s.state === "connected") {
           const epoch = s.companionStartedAt;
-          if (epoch !== undefined && epoch !== lastEpoch) {
-            const isFirstEpoch = lastEpoch === undefined;
+          if (epoch !== undefined && epoch !== lastEpochRef.current) {
+            // Codex R2-P2 — `lastEpochRef` survives transport rebuilds.
+            // `null` means we've never seen ANY epoch for this ticket (fresh
+            // mount or ticket change). A non-null value means we saw a prior
+            // epoch on the prior transport — this is a real restart even if
+            // the user clicked retry between them.
+            const isFirstEpoch = lastEpochRef.current === null;
             // First epoch is a fresh connection, not a restart — no prior pty
             // to copy scrollback from. Only set pendingRekey when we actually
             // saw a previous epoch AND we have a captured prev pty_id.
@@ -155,17 +188,15 @@ export function useCompanion(opts: UseCompanionOptions): UseCompanionResult {
               isFirstEpoch ? null : prevActivePtyIdRef.current;
             pendingRekey =
               prevForRekey !== null ? { oldPtyId: prevForRekey } : null;
-            lastEpoch = epoch;
+            lastEpochRef.current = epoch;
             setActivePtyId(null);
             transport
               .openPty(ticketId)
               .then((pid) => {
                 if (cancelled) return;
-                // Capture the freshly-minted pid for the NEXT epoch flip.
-                prevActivePtyIdRef.current = pid;
-                // The rekey-then-forward happens in onFrame (synchronously
-                // when the pty.opened frame arrives). By the time this .then
-                // resolves, the rekey is done — see onFrame below.
+                // setActivePtyId triggers a re-render — the prev-id capture
+                // happens in onFrame so it covers auto-opens AND manual
+                // openPty calls (Codex R2-P2 fix).
                 setActivePtyId(pid);
               })
               .catch(() => {
@@ -204,9 +235,20 @@ export function useCompanion(opts: UseCompanionOptions): UseCompanionResult {
               }
             }
             if (cancelled) return;
+            // Codex R2-P2 — capture the NEW pty_id as the prev for the next
+            // epoch flip AFTER the rekey commits.
+            prevActivePtyIdRef.current = newPtyId;
             for (const cb of frameSubscribers.current) cb(frame);
           })();
           return;
+        }
+        // Codex R2-P2 — capture the most recent pty.opened as "prev active"
+        // so manual openPty() + multi-PTY scenarios still arm restart-rekey
+        // against the right id on the NEXT epoch flip. This runs for both
+        // auto-opens (after a no-rekey first epoch) and any subsequent
+        // openPty() driven by activePty.openPty.
+        if (frame.t === "pty.opened") {
+          prevActivePtyIdRef.current = frame.pty_id;
         }
         for (const cb of frameSubscribers.current) cb(frame);
       },

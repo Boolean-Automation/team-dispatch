@@ -260,6 +260,115 @@ describe("Slice 0 — SPA-wide CSP + helmet headers", () => {
     });
   });
 
+  // ── Codex R2-P3: nonce injection on self-closing tags ─────────────────────
+  //
+  // Pre-fix, the regex rewrote `<link rel="stylesheet" href="..." />` to
+  // `<link rel="stylesheet" href="..." / nonce="...">` — malformed HTML.
+  // Real-world surface: Google Fonts stylesheet links bundled into the SPA
+  // ship as self-closing. The fix inserts nonce BEFORE the trailing `/>`.
+  // Same shape applied to `<script />` (browser-invalid but rewrite-safe).
+  describe("self-closing tag nonce injection (R2-P3)", () => {
+    let appR2: FastifyInstance;
+    beforeAll(async () => {
+      appR2 = Fastify({ logger: false });
+      await appR2.register(helmetPlugin);
+      await appR2.register(cspPlugin);
+      appR2.get("/mixed-shells", async (_req, reply) => {
+        reply.type("text/html");
+        return [
+          "<!doctype html>",
+          "<html>",
+          "<head>",
+          // Self-closing stylesheet link (Google Fonts shape):
+          '  <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Inter" />',
+          // Non-self-closing stylesheet link:
+          '  <link rel="stylesheet" href="/assets/index.css">',
+          // Self-closing stylesheet link with extra attrs:
+          '  <link rel="stylesheet" href="/assets/themed.css" crossorigin />',
+          // Non-self-closing with extra attrs:
+          '  <link rel="stylesheet" href="/assets/print.css" crossorigin>',
+          // Non-stylesheet link — should NOT be rewritten:
+          '  <link rel="icon" href="/favicon.ico" />',
+          "</head>",
+          "<body>",
+          // Self-closing script (browser-invalid but rewrite-safe):
+          '  <script src="/assets/inline.js" />',
+          // Standard script tag:
+          '  <script src="/assets/index.js"></script>',
+          // Script with attrs, non-self-closing:
+          '  <script type="module" src="/assets/module.js"></script>',
+          "</body>",
+          "</html>",
+        ].join("\n");
+      });
+      await appR2.ready();
+    });
+    afterAll(async () => {
+      await appR2.close();
+    });
+
+    it("produces well-formed HTML for self-closing <link /> tags (no '/ nonce=' artifact)", async () => {
+      const res = await appR2.inject({ method: "GET", url: "/mixed-shells" });
+      const html = res.body;
+      // No malformed `/ nonce="..."` sequences anywhere in the output.
+      expect(html).not.toMatch(/\/\s+nonce="/);
+    });
+
+    it("attaches nonce to BOTH self-closing and non-self-closing stylesheet links", async () => {
+      const res = await appR2.inject({ method: "GET", url: "/mixed-shells" });
+      const html = res.body;
+      // All four <link rel="stylesheet"> variants must carry a nonce, and
+      // the self-closing ones must preserve their trailing `/`.
+      const linkTags =
+        html.match(/<link\b[^>]*rel="stylesheet"[^>]*>/g) ?? [];
+      expect(linkTags.length).toBe(4);
+      for (const tag of linkTags) {
+        expect(tag, `expected nonce on stylesheet <link>: ${tag}`).toMatch(
+          /nonce="[a-f0-9]{32}"/
+        );
+        // The nonce attribute must come BEFORE any trailing `/`:
+        if (tag.endsWith("/>")) {
+          expect(
+            tag,
+            `self-closing link must have nonce before /: ${tag}`
+          ).toMatch(/nonce="[a-f0-9]{32}"\s*\/>$/);
+        }
+      }
+    });
+
+    it("does NOT rewrite non-stylesheet <link rel='icon' /> tags", async () => {
+      const res = await appR2.inject({ method: "GET", url: "/mixed-shells" });
+      const html = res.body;
+      const iconLink = html.match(/<link\b[^>]*rel="icon"[^>]*>/)?.[0];
+      expect(iconLink).toBeTruthy();
+      expect(iconLink!).not.toContain("nonce=");
+    });
+
+    it("attaches nonce to self-closing <script /> with the `/` preserved", async () => {
+      const res = await appR2.inject({ method: "GET", url: "/mixed-shells" });
+      const html = res.body;
+      // The self-closing script tag (browser-invalid but a real-world
+      // serializer artifact) must still get nonce'd and end with `/>`.
+      const selfClosingScript = html.match(
+        /<script\b[^>]*src="\/assets\/inline\.js"[^>]*>/
+      )?.[0];
+      expect(selfClosingScript).toBeTruthy();
+      expect(selfClosingScript!).toMatch(/nonce="[a-f0-9]{32}"\s*\/>$/);
+    });
+
+    it("attaches nonce to all <script> tags regardless of shape", async () => {
+      const res = await appR2.inject({ method: "GET", url: "/mixed-shells" });
+      const html = res.body;
+      const scriptTags = html.match(/<script\b[^>]*>/g) ?? [];
+      expect(scriptTags.length).toBe(3);
+      for (const tag of scriptTags) {
+        expect(tag, `expected nonce on <script>: ${tag}`).toMatch(
+          /nonce="[a-f0-9]{32}"/
+        );
+      }
+    });
+  });
+
   // ── Helmet's other defaults ────────────────────────────────────────────────
   it("emits X-Content-Type-Options: nosniff", async () => {
     const res = await app.inject({ method: "GET", url: "/health" });
