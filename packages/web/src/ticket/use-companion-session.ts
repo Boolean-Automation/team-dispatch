@@ -21,6 +21,21 @@ import {
   CompanionWsTransport,
   type CompanionSessionMeta,
 } from "./companion-ws-transport.js";
+import { scrollbackStore } from "../terminal/scrollback-store.js";
+
+/**
+ * Codex post-qa P2 fix — muted marker written into the rekeyed scrollback
+ * AFTER the old chunks are copied forward to the new pty_id. When `Terminal`
+ * mounts against the new pty_id and `getRecent` returns the chunk stream,
+ * this line is the last thing in the buffer, so the SE sees:
+ *   ...prior shell output...
+ *   [Previous shell ended when Companion restarted; new shell started.]
+ *   $ (new prompt)
+ * Dim-italic SGR (`\x1b[2m`) so xterm renders it visually distinct from real
+ * shell output. Resets via `\x1b[0m` before the newline.
+ */
+const RESTART_MARKER =
+  "\x1b[2m[Previous shell ended when Companion restarted; new shell started.]\x1b[0m\r\n";
 
 export interface UseCompanionOptions {
   /** The ticket the session is for. */
@@ -66,6 +81,13 @@ export function useCompanion(opts: UseCompanionOptions): UseCompanionResult {
   const frameSubscribers = useRef(new Set<(frame: ServerFrame) => void>());
   const transportRef = useRef<TerminalTransport | null>(null);
 
+  // Codex post-qa P2 fix — track the most-recently-active pty_id for this
+  // (hook instance, ticket). Captured AFTER each successful pty.open so the
+  // NEXT epoch flip can rekey scrollback forward from old → new. Initialized
+  // null so the first epoch (lastEpoch === undefined path) is a no-op rekey
+  // (there is no old pty to copy from).
+  const prevActivePtyIdRef = useRef<string | null>(null);
+
   const injectedTransport = opts.transport;
 
   // Build (or reuse) a transport whose lifetime is tied to (ticket, retry).
@@ -104,6 +126,18 @@ export function useCompanion(opts: UseCompanionOptions): UseCompanionResult {
     let cancelled = false;
     let lastEpoch: number | undefined;
 
+    // Codex post-qa P2 fix — Companion-restart rekey-forward state.
+    //
+    // When the epoch flips, `pendingRekey` captures the dead pty_id from the
+    // prior epoch. The very next `pty.opened` frame is intercepted in onFrame:
+    // we rekey scrollback forward (old → new), append the muted marker, and
+    // ONLY THEN forward the frame to subscribers (`useActivePty`). That
+    // ordering guarantees `useActivePty.activePtyId` doesn't flip — and the
+    // Terminal doesn't re-mount + call `getRecent` — until the rekeyed bytes
+    // are committed to IDB. Subscribers see a slightly delayed but ordered
+    // frame stream.
+    let pendingRekey: { oldPtyId: string } | null = null;
+
     transport.connect({
       onStatus: (s) => {
         if (cancelled) return;
@@ -113,12 +147,26 @@ export function useCompanion(opts: UseCompanionOptions): UseCompanionResult {
         if (s.state === "connected") {
           const epoch = s.companionStartedAt;
           if (epoch !== undefined && epoch !== lastEpoch) {
+            const isFirstEpoch = lastEpoch === undefined;
+            // First epoch is a fresh connection, not a restart — no prior pty
+            // to copy scrollback from. Only set pendingRekey when we actually
+            // saw a previous epoch AND we have a captured prev pty_id.
+            const prevForRekey =
+              isFirstEpoch ? null : prevActivePtyIdRef.current;
+            pendingRekey =
+              prevForRekey !== null ? { oldPtyId: prevForRekey } : null;
             lastEpoch = epoch;
             setActivePtyId(null);
             transport
               .openPty(ticketId)
               .then((pid) => {
-                if (!cancelled) setActivePtyId(pid);
+                if (cancelled) return;
+                // Capture the freshly-minted pid for the NEXT epoch flip.
+                prevActivePtyIdRef.current = pid;
+                // The rekey-then-forward happens in onFrame (synchronously
+                // when the pty.opened frame arrives). By the time this .then
+                // resolves, the rekey is done — see onFrame below.
+                setActivePtyId(pid);
               })
               .catch(() => {
                 /* surfaced via onStatus */
@@ -127,6 +175,39 @@ export function useCompanion(opts: UseCompanionOptions): UseCompanionResult {
         }
       },
       onFrame: (frame) => {
+        // Intercept the first `pty.opened` for this ticket AFTER an epoch
+        // flip: rekey scrollback forward, append the muted marker, THEN
+        // forward the frame to subscribers so useActivePty's activePtyId
+        // flips only when the Terminal can safely read the rekeyed buffer.
+        if (pendingRekey !== null && frame.t === "pty.opened") {
+          const oldPtyId = pendingRekey.oldPtyId;
+          const newPtyId = frame.pty_id;
+          pendingRekey = null;
+          // Fire-and-await: subscribers see the frame only after the IDB
+          // writes commit. IDB failure is non-fatal — the live shell still
+          // works without rekeyed scrollback.
+          void (async () => {
+            if (oldPtyId !== newPtyId) {
+              try {
+                await scrollbackStore.rekeyForward(
+                  ticketId,
+                  oldPtyId,
+                  newPtyId
+                );
+                await scrollbackStore.append(
+                  ticketId,
+                  newPtyId,
+                  new TextEncoder().encode(RESTART_MARKER)
+                );
+              } catch {
+                /* IDB failure — proceed without rekey */
+              }
+            }
+            if (cancelled) return;
+            for (const cb of frameSubscribers.current) cb(frame);
+          })();
+          return;
+        }
         for (const cb of frameSubscribers.current) cb(frame);
       },
     });
