@@ -13,6 +13,10 @@ dist/
 # Local HTTPS dev cert (self-signed; serve-https.mjs generates it — never commit a private key)
 .https-cert/
 
+# Local HTTPS capture harness (private key material may land here; capture
+# script + bak files; never commit)
+.local-https/
+
 # Env files (never commit secrets)
 .env
 .env.local
