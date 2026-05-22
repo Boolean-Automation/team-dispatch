@@ -115,8 +115,13 @@ describe("usePanelState — P2-4 side-effect-out-of-reducer fix", () => {
   });
 
   it("syncedPosition (from Settings) does NOT fire persistPosition (one-way flow)", () => {
-    // The hook should react to Clerk-pushed syncedPosition by updating local
-    // state, but NOT re-persist (that would be a write-loop).
+    // NEW-1 binding test (round-2 gate-review.md): syncedPosition is the
+    // Clerk → local direction. Local state updates, but the persist effect
+    // MUST stay silent — otherwise every cross-tab BC sync round-trips
+    // through Clerk, doubling writes. Pre-fix this asserted
+    // `toHaveBeenCalledTimes(1)`, which codified the bug. Post-fix the
+    // syncedPosition useEffect pre-stamps prevPersistedPositionRef so the
+    // persist effect's equality guard suppresses the spurious write.
     const persistPosition = vi.fn();
     const { result, rerender } = renderHook(
       ({ synced }: { synced: "bottom" | "right" }) =>
@@ -133,8 +138,32 @@ describe("usePanelState — P2-4 side-effect-out-of-reducer fix", () => {
     // Settings pushes 'right' in.
     rerender({ synced: "right" });
     expect(result.current.state.position).toBe("right");
-    // The persist effect fires when state.position changes — which is once
-    // for the sync-driven update. That's the expected single firing.
+    // The sync-driven flip MUST NOT fire persistPosition — that would be a
+    // write-loop with the other tab.
+    expect(persistPosition).toHaveBeenCalledTimes(0);
+  });
+
+  it("NEW-1 regression guard: user-driven togglePosition STILL fires persist even when syncedPosition is wired", () => {
+    // The NEW-1 fix pre-stamps prevPersistedPositionRef from syncedPosition
+    // updates. This test proves the fix didn't accidentally break the P2-4
+    // contract: a USER-DRIVEN togglePosition (toolbar) must still fire the
+    // Clerk write exactly once.
+    const persistPosition = vi.fn();
+    const { result } = renderHook(() =>
+      usePanelState({
+        initialPosition: "bottom",
+        syncedPosition: "bottom",
+        persistPosition,
+      })
+    );
+
+    expect(persistPosition).not.toHaveBeenCalled();
+
+    act(() => {
+      result.current.togglePosition();
+    });
+
+    expect(result.current.state.position).toBe("right");
     expect(persistPosition).toHaveBeenCalledTimes(1);
     expect(persistPosition).toHaveBeenCalledWith("right");
   });

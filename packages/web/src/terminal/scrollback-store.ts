@@ -21,7 +21,12 @@
 // shrink the byte budget. NOT exported from index.ts — production code never
 // touches it.
 
-import { openDB, type IDBPDatabase, type DBSchema } from "idb";
+import {
+  openDB,
+  type IDBPDatabase,
+  type IDBPObjectStore,
+  type DBSchema,
+} from "idb";
 
 /** A persisted chunk row. One per `append` call. */
 export interface ChunkRow {
@@ -123,9 +128,23 @@ async function writeMeta(
  * Evict chunks until totalBytes is at or under the budget. Closed-ticket
  * chunks go first (oldest closed_at first); then open-ticket chunks (oldest
  * written_at). Mutates `meta.totalBytes` in place.
+ *
+ * NEW-2 fix (round-2 gate-review.md): accepts an opened `chunksStore` from a
+ * caller-owned `readwrite` transaction so eviction shares atomicity with the
+ * append that triggered it. Pre-fix, eviction opened its own transactions
+ * (separate `readonly` cursor txs + separate `delete()` txs), so two concurrent
+ * over-budget appends could each evict in parallel and clobber each other's
+ * meta totals. Post-fix, all chunk reads/deletes during eviction happen on
+ * the same tx that wrote the chunk + meta, so the IDB serialization model
+ * ensures one append's full append+evict completes before the next begins.
  */
 async function evictUntilUnderBudget(
-  db: IDBPDatabase<ScrollbackSchema>,
+  chunksStore: IDBPObjectStore<
+    ScrollbackSchema,
+    ("chunks" | "meta")[],
+    "chunks",
+    "readwrite"
+  >,
   meta: MetaRow
 ): Promise<void> {
   if (meta.totalBytes <= meta.byteBudget) return;
@@ -133,10 +152,7 @@ async function evictUntilUnderBudget(
   // Phase 1: closed-ticket chunks, oldest closed_at first.
   // Iterate via the byClosedAt index — null values are excluded by IDB ranges,
   // so we get only closed rows.
-  let cursor = await db
-    .transaction("chunks", "readonly")
-    .store.index("byClosedAt")
-    .openCursor();
+  let cursor = await chunksStore.index("byClosedAt").openCursor();
   const closedKeys: { key: string; size: number; closed_at: number }[] = [];
   while (cursor) {
     const row = cursor.value;
@@ -153,16 +169,13 @@ async function evictUntilUnderBudget(
 
   for (const ck of closedKeys) {
     if (meta.totalBytes <= meta.byteBudget) break;
-    await db.delete("chunks", ck.key);
+    await chunksStore.delete(ck.key);
     meta.totalBytes -= ck.size;
   }
   if (meta.totalBytes <= meta.byteBudget) return;
 
   // Phase 2: open-ticket chunks, oldest written_at first.
-  let openCursor = await db
-    .transaction("chunks", "readonly")
-    .store.index("byWrittenAt")
-    .openCursor();
+  let openCursor = await chunksStore.index("byWrittenAt").openCursor();
   const openKeys: { key: string; size: number; written_at: number }[] = [];
   while (openCursor) {
     const row = openCursor.value;
@@ -179,7 +192,7 @@ async function evictUntilUnderBudget(
 
   for (const ok of openKeys) {
     if (meta.totalBytes <= meta.byteBudget) break;
-    await db.delete("chunks", ok.key);
+    await chunksStore.delete(ok.key);
     meta.totalBytes -= ok.size;
   }
 }
@@ -199,11 +212,17 @@ async function evictUntilUnderBudget(
  *             first append's `writeMeta` already committed, so totalBytes
  *             accumulates correctly.
  *
- * Eviction (a multi-cursor walk) stays OUTSIDE the append transaction —
- * doing eviction inside the same tx would tie up the chunks store for
- * potentially many MB of cursor work, blocking other transactions. The
- * trade is that eviction can momentarily over-shoot the budget; that's
- * acceptable because the budget itself is a soft target.
+ * NEW-2 fix (round-2 gate-review.md): eviction now runs INSIDE the same
+ * `db.transaction([chunks, meta], 'readwrite')` so append + eviction is one
+ * atomic unit. Pre-fix, eviction happened outside the append tx, so two
+ * concurrent over-budget appends could each run eviction in parallel and
+ * clobber each other's final meta write — `meta.totalBytes` could drift
+ * permanently below the actual sum of chunk bytes. Post-fix, the IDB
+ * transaction model serializes append+evict per call, so the second
+ * concurrent append's tx only begins after the first commits both its
+ * chunk write AND any eviction it triggered. The trade is a slightly
+ * longer-held lock (the cursor walk happens under the same tx) but
+ * eviction is rare (only when over budget) so the simplicity wins.
  */
 async function append(
   ticket_id: string,
@@ -216,9 +235,8 @@ async function append(
   // Copy the bytes — Uint8Array views over a shared buffer leak surprises.
   const bytesCopy = new Uint8Array(bytes);
 
-  // P2-1: single transaction across chunks + meta. The tx serializes the
-  // RMW so a concurrent append on the same (ticket, pty) sees our committed
-  // meta before issuing its own read.
+  // Single transaction across chunks + meta — covers read-meta, put-chunk,
+  // write-meta AND eviction (when budget is exceeded). One atomic unit.
   const tx = db.transaction(["chunks", "meta"], "readwrite");
   const chunksStore = tx.objectStore("chunks");
   const metaStore = tx.objectStore("meta");
@@ -248,16 +266,15 @@ async function append(
   await chunksStore.put(row);
 
   meta.totalBytes += bytesCopy.length;
+
+  // NEW-2 fix: eviction runs INSIDE this same tx. Operates on `chunksStore`
+  // (already open at readwrite) and mutates `meta.totalBytes` in place.
+  if (meta.totalBytes > meta.byteBudget) {
+    await evictUntilUnderBudget(chunksStore, meta);
+  }
+
   await metaStore.put(meta);
   await tx.done;
-
-  // Eviction is intentionally OUTSIDE the append transaction (see jsdoc
-  // above). The post-eviction meta is committed in a separate write.
-  if (meta.totalBytes > meta.byteBudget) {
-    const evictMeta = (await readMeta(db));
-    await evictUntilUnderBudget(db, evictMeta);
-    await writeMeta(db, evictMeta);
-  }
 }
 
 /**

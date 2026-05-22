@@ -267,4 +267,83 @@ describe("scrollbackStore", () => {
     const got = await scrollbackStore.getRecent("DSP-STRESS", "pty-1");
     expect(got.length).toBe(expectedTotal);
   });
+
+  // ── NEW-2 fix (round-2 gate-review.md) — eviction race closed ────────────
+  //
+  // Pre-fix, the P2-1 transactional append left eviction OUTSIDE the tx.
+  // When two concurrent appends both pushed totalBytes over budget, both
+  // ran the post-tx eviction block in parallel: each read meta separately,
+  // walked the cursor separately, and wrote meta separately. The final
+  // writeMeta clobbered the other's update — meta.totalBytes could drift
+  // below the actual sum of remaining chunk bytes. Post-fix, eviction runs
+  // INSIDE the same tx as the append, so the second concurrent append's
+  // tx only begins after the first commits its full append+evict.
+
+  it("NEW-2: concurrent appends that cross the budget threshold do not lose chunks to eviction race", async () => {
+    // Budget: 1000 bytes. Pre-fill: 800 bytes across 2 closed-ticket chunks
+    // (400 each) so they're the eviction targets. Fire 5 concurrent 100-byte
+    // appends to a different (open) ticket — collectively they push us
+    // 1300 - 1000 = 300 bytes over. Eviction must drop the closed chunks
+    // cleanly without race.
+    await scrollbackStore.__forTest.setByteBudget(1000);
+
+    // Pre-fill the store with 800 bytes across 2 chunks on a CLOSED ticket.
+    await scrollbackStore.append(
+      "DSP-PREFILL",
+      "pty-0",
+      bytes("p".repeat(400))
+    );
+    await scrollbackStore.append(
+      "DSP-PREFILL",
+      "pty-0",
+      bytes("q".repeat(400))
+    );
+    await scrollbackStore.markTicketClosed("DSP-PREFILL");
+    // Backdate closed_at so the prefill chunks are the unambiguous eviction
+    // target (oldest closed_at first).
+    {
+      const db = await scrollbackStore.__forTest.getDb();
+      const tx = db.transaction("chunks", "readwrite");
+      const all = await tx.store.getAll();
+      for (const row of all) {
+        if (row.ticket_id === "DSP-PREFILL") {
+          row.closed_at = 1_000;
+          await tx.store.put(row);
+        }
+      }
+      await tx.done;
+    }
+
+    // Fire 5 concurrent appends of 100 bytes each on an OPEN ticket.
+    // Each push tips totalBytes over 1000 — every one races eviction.
+    const labels = ["a", "b", "c", "d", "e"];
+    await Promise.all(
+      labels.map((c) =>
+        scrollbackStore.append("DSP-OPEN", "pty-1", bytes(c.repeat(100)))
+      )
+    );
+
+    // Sum the actual chunk bytes that remain in the DB.
+    const db = await scrollbackStore.__forTest.getDb();
+    const allChunks = await db.getAll("chunks");
+    const actualTotal = allChunks.reduce((sum, r) => sum + r.size_bytes, 0);
+
+    const meta = await db.get("meta", "meta");
+    expect(meta).toBeDefined();
+
+    // The CORE invariant — meta.totalBytes must equal the actual sum of
+    // remaining chunk bytes. Pre-fix this could drift below; post-fix it
+    // stays exact because append+evict is atomic.
+    expect(meta!.totalBytes).toBe(actualTotal);
+
+    // The store must be at or under budget after eviction settles.
+    expect(meta!.totalBytes).toBeLessThanOrEqual(meta!.byteBudget);
+
+    // Eviction order: closed-ticket prefill chunks evict first. The 5 open
+    // chunks (500 bytes) must ALL still be present; the closed prefill
+    // chunks should be evicted (at least partially) to make room.
+    const openChunks = allChunks.filter((r) => r.ticket_id === "DSP-OPEN");
+    expect(openChunks.length).toBe(5);
+    expect(openChunks.reduce((sum, r) => sum + r.size_bytes, 0)).toBe(500);
+  });
 });

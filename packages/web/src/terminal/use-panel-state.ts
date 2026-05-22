@@ -82,19 +82,6 @@ export function usePanelState(opts?: {
     poppedOut: false,
   }));
 
-  // S5 — when the Settings-driven position changes (own-tab save OR
-  // cross-window BroadcastChannel), reflect it in local state.
-  useEffect(() => {
-    if (opts?.syncedPosition === undefined) return;
-    setState((s) =>
-      s.position === opts.syncedPosition ? s : { ...s, position: opts.syncedPosition! }
-    );
-  }, [opts?.syncedPosition]);
-
-  useEffect(() => {
-    persistToStorage(state);
-  }, [state]);
-
   // P2-4 fix (gate-review.md): the Clerk persistPosition side effect must
   // run OUTSIDE the setState reducer. React 18 StrictMode (dev) and React's
   // upcoming concurrent rendering call reducer functions TWICE for purity
@@ -106,9 +93,37 @@ export function usePanelState(opts?: {
   // Tracking `isInitialMount` prevents the initial-state useEffect tick from
   // posting a "persist initial position" on every mount (which would be
   // noisy + would re-fire the StrictMode double-mount in dev).
+  //
+  // Refs declared above the syncedPosition useEffect so that effect can pre-
+  // stamp `prevPersistedPositionRef` (NEW-1 fix — see below) to suppress
+  // sync-driven Clerk writes.
   const persistPositionRef = useRef(opts?.persistPosition);
   persistPositionRef.current = opts?.persistPosition;
   const prevPersistedPositionRef = useRef<PanelPosition | null>(null);
+
+  // S5 — when the Settings-driven position changes (own-tab save OR
+  // cross-window BroadcastChannel), reflect it in local state.
+  //
+  // NEW-1 fix (round-2 gate-review.md): stamp `prevPersistedPositionRef` to
+  // the incoming syncedPosition BEFORE calling setState. The persist effect
+  // below watches `state.position` and would otherwise fire a Clerk write on
+  // sync-driven flips — doubling Clerk writes per cross-tab BC sync. With
+  // the ref pre-stamped, the persist effect's equality guard
+  // (`prevPersistedPositionRef.current === state.position`) returns early
+  // and the sync stays one-way (Clerk → local, NOT local → Clerk).
+  useEffect(() => {
+    if (opts?.syncedPosition === undefined) return;
+    setState((s) => {
+      if (s.position === opts.syncedPosition) return s;
+      prevPersistedPositionRef.current = opts.syncedPosition!;
+      return { ...s, position: opts.syncedPosition! };
+    });
+  }, [opts?.syncedPosition]);
+
+  useEffect(() => {
+    persistToStorage(state);
+  }, [state]);
+
   useEffect(() => {
     // Skip the initial-mount tick — we only want to persist USER-DRIVEN
     // changes, not the initial state load. `prevPersistedPositionRef` starts
