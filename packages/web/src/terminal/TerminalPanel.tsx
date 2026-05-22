@@ -39,6 +39,11 @@ import { useCompanion } from "../ticket/use-companion-session.js";
 import type { ConnectionState } from "../ticket/terminal-transport.js";
 import type { TerminalTransport } from "../ticket/terminal-transport.js";
 import Ic from "../shell/Ic.js";
+import {
+  useTerminalSettings,
+  type ClerkLikeUser,
+} from "../settings/use-terminal-settings.js";
+import { useUser } from "@clerk/clerk-react";
 
 export interface TerminalPanelProps {
   /** The ticket's display id (`DSP-2841`) — scopes the panel + PTY. */
@@ -62,7 +67,20 @@ export function TerminalPanel({
   transport: injectedTransport,
   initialPosition,
 }: TerminalPanelProps): React.ReactElement | null {
-  const panel = usePanelState({ initialPosition });
+  // S5 — read terminal settings (theme/font/scrollback/position) from Clerk
+  // publicMetadata via the single-source-of-truth hook. The hook returns
+  // defaults when no user is signed in / no provider is mounted.
+  const safeUser = useSafeClerkLikeUser();
+  const { settings: terminalSettings, save: saveTerminalSettings } =
+    useTerminalSettings({ user: safeUser });
+
+  const panel = usePanelState({
+    initialPosition,
+    syncedPosition: terminalSettings.position,
+    persistPosition: (next) => {
+      void saveTerminalSettings({ position: next });
+    },
+  });
   const companion = useCompanion({
     ticketId,
     transport: injectedTransport,
@@ -293,6 +311,9 @@ export function TerminalPanel({
             ptyId={activePtyId}
             ticketId={ticketId}
             transport={transport}
+            themeName={terminalSettings.theme}
+            fontSize={terminalSettings.font.size}
+            scrollback={terminalSettings.scrollbackLines}
           />
         ) : (
           <TermFailure state={status.state} onRetry={companion.retry} />
@@ -413,4 +434,43 @@ function TermFailure({
       )}
     </div>
   );
+}
+
+// ── Safe Clerk wrapper ───────────────────────────────────────────────────────
+//
+// Same pattern as the Settings page: call useUser() inside a try/catch so the
+// panel mounts cleanly in tests / pre-Clerk-setup dev. Returns a Clerk-like
+// user adapter (or null) for useTerminalSettings to consume.
+
+interface ClerkRawUser {
+  id: string;
+  publicMetadata: Record<string, unknown>;
+  reload: () => Promise<unknown>;
+  update: (patch: {
+    publicMetadata: Record<string, unknown>;
+  }) => Promise<unknown>;
+}
+
+function useSafeClerkLikeUser(): ClerkLikeUser | null {
+  let raw: ClerkRawUser | null = null;
+  try {
+    const result = useUser();
+    raw = (result.user ?? null) as ClerkRawUser | null;
+  } catch {
+    raw = null;
+  }
+  if (!raw) return null;
+  const captured: ClerkRawUser = raw;
+  return {
+    id: captured.id,
+    get publicMetadata() {
+      return captured.publicMetadata;
+    },
+    reload: async () => {
+      await captured.reload();
+    },
+    update: async (patch) => {
+      await captured.update(patch);
+    },
+  };
 }

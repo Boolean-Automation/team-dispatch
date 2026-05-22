@@ -37,6 +37,8 @@ export interface TerminalProps {
   themeName?: ThemeName;
   /** Font size in px. Default 13. */
   fontSize?: number;
+  /** Scrollback lines (S5 — visual spec §6.3 row 5). Default 10_000. */
+  scrollback?: number;
   /** Optional className for the host div (the panel may set sizing classes). */
   className?: string;
 }
@@ -63,7 +65,7 @@ export interface TerminalHandle {
  */
 export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
   function Terminal(
-    { ptyId, ticketId, transport, themeName, fontSize, className }: TerminalProps,
+    { ptyId, ticketId, transport, themeName, fontSize, scrollback, className }: TerminalProps,
     ref
   ) {
     const { containerRef, term, searchAddon, fit } = useTerminal({
@@ -72,6 +74,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
       transport,
       themeName,
       fontSize,
+      scrollback,
     });
 
     useImperativeHandle(

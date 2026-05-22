@@ -1,36 +1,15 @@
-// dispatch — Settings stub page (Phase 1: nav target only)
-// Full Triggers / Team & OOO / Connections / General UI is deferred per surface-map §4.
+// dispatch — Settings index page (Phase 2 / Slice 5).
+//
+// In Phase 1 this rendered a single "coming later" stub. Phase 2 lifts the
+// shell into a proper 264px nav + tab body. The only tab implemented in this
+// phase is `/settings/terminal` — every other tab is a disabled `.is-stub`.
+//
+// Hitting `/settings` directly redirects to `/settings/terminal` since
+// Terminal is the only enabled section in Phase 2.
 
 import React from "react";
-import { Rail } from "../shell/Rail";
+import { Navigate } from "react-router-dom";
 
 export function SettingsPage() {
-  return (
-    <div className="app settings">
-      <Rail current="settings" />
-      <div className="main" style={{ display: "flex", flexDirection: "column" }}>
-        {/* Topbar stub */}
-        <div className="topbar">
-          <div className="topbar-title">
-            <span className="screen-title">Settings</span>
-          </div>
-        </div>
-        {/* Content placeholder — full Settings surface is deferred */}
-        <div
-          style={{
-            flex: 1,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            color: "var(--text-3)",
-            fontFamily: "var(--font-mono)",
-            fontSize: 12,
-            letterSpacing: "0.04em",
-          }}
-        >
-          Settings — coming in a later phase
-        </div>
-      </div>
-    </div>
-  );
+  return <Navigate to="/settings/terminal" replace />;
 }

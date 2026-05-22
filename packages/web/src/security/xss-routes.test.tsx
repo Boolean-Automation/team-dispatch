@@ -101,6 +101,7 @@ import { useTickets, useTicket, useMessages, useTicketActivity, useAccount } fro
 import { IssuesPage } from "../issues/IssuesPage";
 import { TicketDetailPage } from "../ticket/TicketDetailPage";
 import { SettingsPage } from "../settings/SettingsPage";
+import { TerminalSettingsPage } from "../routes/settings/terminal";
 import { AnalyticsPage } from "../analytics/AnalyticsPage";
 
 // ── Fixture builders parameterized by malicious payload ──────────────────────
@@ -180,6 +181,10 @@ function renderRoute(initialPath: string) {
           <Route path="/" element={<IssuesPage />} />
           <Route path="/t/:displayId" element={<TicketDetailPage />} />
           <Route path="/settings" element={<SettingsPage />} />
+          <Route
+            path="/settings/terminal"
+            element={<TerminalSettingsPage userOverride={null} />}
+          />
           <Route path="/analytics" element={<AnalyticsPage />} />
         </Routes>
       </MemoryRouter>

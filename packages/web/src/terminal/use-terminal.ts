@@ -39,6 +39,8 @@ export interface UseTerminalOptions {
   themeName?: ThemeName;
   /** Font size in px. Visual-spec §4.2 default = 13 (12 in spec, 13 in S2 instructions). */
   fontSize?: number;
+  /** Scrollback lines. Visual-spec §6.3 row 5 (1k|5k|10k). Defaults to 10_000. */
+  scrollback?: number;
   /** Override `term.write` for testing — defaults to the real Terminal method. */
   writeOverride?: (term: Terminal, bytes: Uint8Array | string) => void;
 }
@@ -175,6 +177,7 @@ export function useTerminal(opts: UseTerminalOptions): UseTerminalResult {
     const themeName = optsRef.current.themeName ?? DEFAULT_THEME;
     const theme = themes[themeName];
     const fontSize = optsRef.current.fontSize ?? 13;
+    const scrollback = optsRef.current.scrollback ?? 10_000;
 
     const xtermOptions: ITerminalOptions = {
       fontFamily: "'JetBrains Mono', 'Menlo', monospace",
@@ -183,7 +186,7 @@ export function useTerminal(opts: UseTerminalOptions): UseTerminalResult {
       letterSpacing: 0,
       cursorBlink: true,
       cursorStyle: "bar",
-      scrollback: 10_000,
+      scrollback,
       allowProposedApi: true,
       allowTransparency: false,
       convertEol: false,
@@ -386,6 +389,45 @@ export function useTerminal(opts: UseTerminalOptions): UseTerminalResult {
       /* host detached */
     }
   }
+
+  // Live-apply theme / fontSize / scrollback changes from Settings (S5).
+  // The Settings page broadcasts a `dispatch-settings:applied` message after
+  // every successful save; `useTerminalSettings` updates local state on
+  // receive, and TerminalPanel re-renders us with the new props. We apply
+  // them to the existing xterm without rebuilding the terminal.
+  useEffect(() => {
+    const term = instances.term;
+    if (!term) return;
+    const themeName = opts.themeName ?? DEFAULT_THEME;
+    try {
+      term.options.theme = themes[themeName];
+    } catch {
+      /* xterm not mounted yet */
+    }
+  }, [instances.term, opts.themeName]);
+
+  useEffect(() => {
+    const term = instances.term;
+    if (!term) return;
+    if (opts.fontSize === undefined) return;
+    try {
+      term.options.fontSize = opts.fontSize;
+      fitRef.current?.fit();
+    } catch {
+      /* xterm not mounted yet */
+    }
+  }, [instances.term, opts.fontSize]);
+
+  useEffect(() => {
+    const term = instances.term;
+    if (!term) return;
+    if (opts.scrollback === undefined) return;
+    try {
+      term.options.scrollback = opts.scrollback;
+    } catch {
+      /* xterm not mounted yet */
+    }
+  }, [instances.term, opts.scrollback]);
 
   return {
     containerRef,

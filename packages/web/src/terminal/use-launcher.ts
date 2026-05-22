@@ -24,6 +24,10 @@
 import { useCallback, useMemo, useState } from "react";
 import { useUser } from "@clerk/clerk-react";
 import type { TerminalTransport } from "../ticket/terminal-transport.js";
+import {
+  readTerminalSettings,
+  type ClerkLikeUser,
+} from "../settings/use-terminal-settings.js";
 
 /** Launcher shape stored in Clerk publicMetadata.terminalSettings.launcher. */
 export interface LauncherConfig {
@@ -86,25 +90,16 @@ export interface UseLauncherResult {
 
 /**
  * Read the launcher config from Clerk publicMetadata, falling back to the
- * default. Tolerant of any partial / wrong-shape metadata (defensive cast).
+ * default. As of Slice 5 this routes through useTerminalSettings's
+ * `readTerminalSettings` so there is exactly ONE place in the codebase that
+ * understands the `publicMetadata.terminalSettings` shape — single source of
+ * truth per slice plan §S5.
  */
 function readLauncherFromMetadata(
   publicMetadata: Record<string, unknown> | undefined
 ): LauncherConfig {
-  if (!publicMetadata) return DEFAULT_LAUNCHER;
-  const terminalSettings = publicMetadata["terminalSettings"];
-  if (!terminalSettings || typeof terminalSettings !== "object") {
-    return DEFAULT_LAUNCHER;
-  }
-  const launcher = (terminalSettings as Record<string, unknown>)["launcher"];
-  if (!launcher || typeof launcher !== "object") return DEFAULT_LAUNCHER;
-  const label = (launcher as Record<string, unknown>)["label"];
-  const command = (launcher as Record<string, unknown>)["command"];
-  if (typeof label !== "string" || typeof command !== "string") {
-    return DEFAULT_LAUNCHER;
-  }
-  if (label.length === 0 || command.length === 0) return DEFAULT_LAUNCHER;
-  return { label, command };
+  const settings = readTerminalSettings(publicMetadata);
+  return settings.launcher;
 }
 
 /**

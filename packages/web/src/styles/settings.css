@@ -74,6 +74,14 @@
   color: var(--text-3); display: grid; place-items: center;
 }
 .trig-item.disabled .name { color: var(--text-3); }
+/* Phase 2 / S5 — disabled-stub treatment for SettingsNav items.
+   Matches the §3.5 stub-treatment precedent and the `.is-stub` selector
+   the visual spec cites for §6.1. */
+.nav-item.is-stub {
+  opacity: 0.45;
+  cursor: not-allowed;
+  pointer-events: none;
+}
 .trig-item .meta { min-width: 0; }
 .trig-item .name {
   font-size: 13px; font-weight: 600; color: var(--text);
