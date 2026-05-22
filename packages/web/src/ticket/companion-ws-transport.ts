@@ -1,96 +1,75 @@
-// dispatch — companion-ws-transport: the real Companion WebSocket transport.
+// dispatch — companion-ws-transport: the Phase 2 multi-PTY Companion transport.
 //
-// A `TerminalTransport` implementation backed by the local Companion. It:
-//   1. mints a scoped connection token via POST /api/companion/sessions
-//      (through `api-client.ts` — the lint-allowed web→backend touchpoint),
-//   2. probes GET http://127.0.0.1:<port>/healthz for discovery (OQ-S4),
-//   3. opens the loopback WebSocket with the token + ticket + session scope,
-//   4. validates the explicit handshake — a `session-meta` frame with a
-//      protocolVersion this web app speaks — so an unauthenticated
-//      port-squatter that cannot complete the handshake is treated as
-//      "Companion offline" (it is NOT silently trusted; spec A12c),
-//   5. maps frames onto the `TerminalTransport` contract.
+// One WebSocket per browser window. Each WS may own zero-or-more PTYs keyed by
+// a server-minted ULID. The transport:
+//   1. mints a scoped connection token via POST /api/companion/sessions,
+//   2. probes GET http://127.0.0.1:<port>/healthz,
+//   3. opens the loopback WebSocket and waits for a `hello` frame,
+//   4. validates the protocolVersion + intersects capabilities,
+//   5. tracks `companion_started_at`; a new epoch on reconnect invalidates
+//      cached pty_ids (Phase 2 no-resume — clients spawn fresh `pty.open`).
 //
-// `PanelTerminal` never sees any of this — it depends only on the
-// `TerminalTransport` interface (the seam).
+// The Terminal component never sees any of this — it depends only on the
+// `TerminalTransport` interface (the seam) + the narrower
+// `TerminalSubscribeTransport` it consumes via `terminal/index.ts`.
 
 import type {
   TerminalTransport,
   TransportHandlers,
+  TransportStatus,
   ConnectionState,
+  PtyFrame,
 } from "./terminal-transport.js";
 import {
   parseServerFrame,
   isProtocolCompatible,
+  intersectCapabilities,
+  CLIENT_CAPABILITIES,
   type ClientFrame,
+  type ServerFrame,
 } from "./companion-protocol.js";
 import { apiClient } from "../lib/api-client.js";
+import { fireInfoToast } from "../lib/use-undoable-mutation.js";
 
-/** Default fixed loopback port the Companion listens on (OQ-S4). */
+/** Default fixed loopback port the Companion listens on. */
 const DEFAULT_COMPANION_PORT = 7720;
 
-/**
- * How long the transport waits for a valid `session-meta` handshake frame
- * after the socket opens before giving up. A process that accepts the
- * WebSocket and then sends nothing — a fake/stale Companion or a port-squatter
- * — must not leave the panel in `connecting` forever (A12c/A14 "does not
- * hang"). 5s is generous for a loopback handshake yet short enough that the
- * panel surfaces a clean failure state quickly.
- */
+/** Handshake-timeout guard (visual spec §7.1 — Companion isn't running). */
 const HANDSHAKE_TIMEOUT_MS = 5_000;
 
-/** How a connection token is obtained — injected so tests need no live api. */
+/** Token-mint contract — injected so tests need no live api. */
 export interface CompanionTokenResponse {
   token: string;
   sessionId: string;
   port: number;
 }
 
-export type MintTokenFn = (ticketId: string, origin: string) => Promise<CompanionTokenResponse>;
+export type MintTokenFn = (
+  ticketId: string,
+  origin: string
+) => Promise<CompanionTokenResponse>;
 
-/** A probe of GET /healthz — injected so tests need no live Companion. */
 export type HealthProbeFn = (port: number) => Promise<boolean>;
 
-/** A WebSocket factory — injected so tests need no real socket. */
 export type SocketFactory = (url: string) => WebSocket;
 
-/**
- * Optional Ticket metadata injected into the spawned `claude` session as
- * opening context (OQ-S2). The Companion reads these from the WS URL query
- * params and builds the context preamble. `ticketId` is always carried (it is
- * the token scope); these add the human-readable fields.
- */
+/** Optional ticket metadata for the context-injection preamble. */
 export interface CompanionSessionMeta {
-  /** Ticket status — e.g. "new", "on-you". */
   status?: string;
-  /** Client slug, when the panel has the Account loaded. */
   clientSlug?: string;
-  /** Ticket title, when available. */
   title?: string;
 }
 
 export interface CompanionWsTransportOptions {
-  /** The ticket the session is for — scopes the minted token. */
   ticketId: string;
-  /** The dispatch web app origin — audience-binds the token. */
   origin: string;
-  /** Optional Ticket metadata for the context-injection preamble (A15). */
   meta?: CompanionSessionMeta;
-  /** Token mint. Defaults to POST /api/companion/sessions via api-client. */
   mintToken?: MintTokenFn;
-  /** Health probe. Defaults to a fetch of GET /healthz. */
   healthProbe?: HealthProbeFn;
-  /** Socket factory. Defaults to `new WebSocket(url)`. */
   socketFactory?: SocketFactory;
-  /**
-   * Override the handshake timeout — a test hook so a unit test can exercise
-   * the fake/stale-Companion guard without a multi-second real wait. Defaults
-   * to `HANDSHAKE_TIMEOUT_MS`.
-   */
   handshakeTimeoutMs?: number;
 }
 
-/** Default token mint — POST /api/companion/sessions via the api-client. */
 function defaultMintToken(
   ticketId: string,
   origin: string
@@ -101,7 +80,6 @@ function defaultMintToken(
   });
 }
 
-/** Default health probe — GET /healthz on the fixed loopback port. */
 async function defaultHealthProbe(port: number): Promise<boolean> {
   try {
     const res = await fetch(`http://127.0.0.1:${port}/healthz`, {
@@ -112,6 +90,37 @@ async function defaultHealthProbe(port: number): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/** Internal record of a pending pty.open resolution. */
+interface PendingOpen {
+  ticketId: string;
+  resolve: (pty_id: string) => void;
+  reject: (err: Error) => void;
+}
+
+/**
+ * P1-2 fix: monotonic counter for request_id minting. ULID would also work but
+ * a counter keeps the WS frames a few bytes smaller per open and the values
+ * scoped to this transport are guaranteed-unique. Reset on each transport
+ * (one per panel session) — no cross-transport collision risk.
+ */
+let _nextRequestId = 0;
+function mintRequestId(): string {
+  _nextRequestId = (_nextRequestId + 1) >>> 0;
+  return `req-${_nextRequestId}`;
+}
+
+/** Map.values().next() — typed helper for first-insert-order entry. */
+function firstPending(m: Map<string, PendingOpen>): PendingOpen | null {
+  const it = m.values().next();
+  return it.done ? null : it.value;
+}
+
+/** Delete the first-insert-order key from a Map. */
+function deleteFirst(m: Map<string, PendingOpen>): void {
+  const it = m.keys().next();
+  if (!it.done) m.delete(it.value);
 }
 
 /**
@@ -132,12 +141,28 @@ export class CompanionWsTransport implements TerminalTransport {
   private handlers: TransportHandlers | undefined;
   private closed = false;
   private handshakeComplete = false;
-  /**
-   * Fires if no valid `session-meta` arrives within HANDSHAKE_TIMEOUT_MS — the
-   * fake/stale-Companion-hangs-the-panel guard (A12c/A14). Cleared the moment
-   * the handshake completes or the transport is closed.
-   */
   private handshakeTimer: ReturnType<typeof setTimeout> | undefined;
+
+  /** Latest known companion epoch — bumped triggers cache invalidation. */
+  private companionStartedAt: number | undefined;
+  /** Intersected capabilities surfaced via status. */
+  private capabilities: string[] = [];
+
+  /** Per-pty subscribers, keyed by pty_id. */
+  private subscribers = new Map<string, Set<(f: PtyFrame) => void>>();
+  /**
+   * P1-2 fix (gate-review.md): pending pty.open awaiters, keyed by the
+   * client-minted `request_id` that was sent on the open frame. The map shape
+   * (vs. the previous FIFO array) is load-bearing — a `pty.error` for a
+   * specific request_id rejects ONLY that pending promise, leaving any other
+   * concurrent opens untouched. The previous FIFO `cap-exceeded` shift
+   * rejected the wrong pending when multi-PTY opens were in flight, and
+   * `spawn-failed` didn't shift the queue at all so its open hung forever.
+   */
+  private pendingOpens = new Map<string, PendingOpen>();
+
+  /** Latest status (so we can re-emit when subscribers attach). */
+  private currentStatus: TransportStatus = { state: "idle" };
 
   constructor(options: CompanionWsTransportOptions) {
     this.opts = {
@@ -157,18 +182,69 @@ export class CompanionWsTransport implements TerminalTransport {
   }
 
   send(frame: ClientFrame): void {
-    if (this.ws && this.ws.readyState === WebSocket.OPEN && this.handshakeComplete) {
+    if (
+      this.ws &&
+      this.ws.readyState === WebSocket.OPEN &&
+      this.handshakeComplete
+    ) {
       this.ws.send(JSON.stringify(frame));
     }
   }
 
-  resize(cols: number, rows: number): void {
-    this.send({ t: "resize", cols, rows });
+  async openPty(ticketId: string): Promise<string> {
+    if (!this.handshakeComplete) {
+      // Wait for the next connected status, then queue the request. For S3
+      // the panel does not call openPty until connect() resolves to
+      // `connected` — this guard is defense in depth.
+      throw new Error("transport not yet handshaken");
+    }
+    // P1-2: mint a per-request correlation id. The server echoes it back on
+    // `pty.opened` or `pty.error` so we route the resolution to the EXACT
+    // pending promise this open corresponds to.
+    const requestId = mintRequestId();
+    return new Promise<string>((resolve, reject) => {
+      this.pendingOpens.set(requestId, { ticketId, resolve, reject });
+      this.send({ t: "pty.open", ticket_id: ticketId, request_id: requestId });
+    });
+  }
+
+  subscribe(pty_id: string, listener: (f: PtyFrame) => void): () => void {
+    let set = this.subscribers.get(pty_id);
+    if (!set) {
+      set = new Set();
+      this.subscribers.set(pty_id, set);
+    }
+    set.add(listener);
+    return () => {
+      set?.delete(listener);
+      if (set && set.size === 0) {
+        this.subscribers.delete(pty_id);
+      }
+    };
+  }
+
+  write(pty_id: string, data: string): void {
+    this.send({ t: "pty.write", pty_id, data });
+  }
+
+  resize(pty_id: string, cols: number, rows: number): void {
+    this.send({ t: "pty.resize", pty_id, cols, rows });
+  }
+
+  closePty(pty_id: string): void {
+    this.send({ t: "pty.close", pty_id });
+    this.subscribers.delete(pty_id);
   }
 
   close(): void {
     this.closed = true;
     this.clearHandshakeTimer();
+    // Reject any pending opens — the transport is going down.
+    for (const p of this.pendingOpens.values()) {
+      p.reject(new Error("transport closed"));
+    }
+    this.pendingOpens.clear();
+    this.subscribers.clear();
     if (this.ws) {
       try {
         this.ws.close();
@@ -187,25 +263,63 @@ export class CompanionWsTransport implements TerminalTransport {
   }
 
   private setState(state: ConnectionState, detail?: string): void {
-    this.handlers?.onStatus({ state, detail });
+    this.currentStatus = {
+      state,
+      detail,
+      sessionId: this.currentStatus.sessionId,
+      capabilities: this.capabilities,
+      companionStartedAt: this.companionStartedAt,
+    };
+    this.handlers?.onStatus(this.currentStatus);
+  }
+
+  private dispatchPtyFrame(frame: ServerFrame): void {
+    if (frame.t === "pty.data" || frame.t === "pty.exit") {
+      const subs = this.subscribers.get(frame.pty_id);
+      if (subs) {
+        let payload: PtyFrame;
+        if (frame.t === "pty.data") {
+          payload = {
+            kind: "pty.data",
+            pty_id: frame.pty_id,
+            bytes: new TextEncoder().encode(frame.bytes),
+          };
+        } else {
+          payload = {
+            kind: "pty.exit",
+            pty_id: frame.pty_id,
+            code: frame.code,
+            signal: frame.signal,
+          };
+        }
+        for (const sub of subs) {
+          try {
+            sub(payload);
+          } catch {
+            /* subscriber error must not break the WS */
+          }
+        }
+      }
+    }
   }
 
   private async run(): Promise<void> {
     this.setState("connecting");
 
-    // Step 1 — mint a scoped connection token. A mint failure → mint-unavailable.
     let mint: CompanionTokenResponse;
     try {
       mint = await this.opts.mintToken(this.opts.ticketId, this.opts.origin);
     } catch {
-      this.setState("mint-unavailable", "Could not mint a Companion session token.");
+      this.setState(
+        "mint-unavailable",
+        "Could not mint a Companion session token."
+      );
       return;
     }
     if (this.closed) return;
 
     const port = mint.port || DEFAULT_COMPANION_PORT;
 
-    // Step 2 — discovery: probe /healthz. No Companion → not-detected.
     const healthy = await this.opts.healthProbe(port);
     if (this.closed) return;
     if (!healthy) {
@@ -213,16 +327,14 @@ export class CompanionWsTransport implements TerminalTransport {
       return;
     }
 
-    // Step 3 — open the loopback WebSocket, scoped by token + ticket + session.
-    // The optional Ticket metadata rides as query params — the Companion reads
-    // them into the context-injection preamble (A15 / OQ-S2).
     const params = new URLSearchParams({
       token: mint.token,
       ticket: this.opts.ticketId,
       session: mint.sessionId,
     });
     if (this.opts.meta.status) params.set("status", this.opts.meta.status);
-    if (this.opts.meta.clientSlug) params.set("clientSlug", this.opts.meta.clientSlug);
+    if (this.opts.meta.clientSlug)
+      params.set("clientSlug", this.opts.meta.clientSlug);
     if (this.opts.meta.title) params.set("title", this.opts.meta.title);
     const url = `ws://127.0.0.1:${port}/?${params.toString()}`;
 
@@ -234,13 +346,12 @@ export class CompanionWsTransport implements TerminalTransport {
       return;
     }
     this.ws = ws;
+    // Track sessionId so the status surface stays consistent across states.
+    this.currentStatus = {
+      ...this.currentStatus,
+      sessionId: mint.sessionId,
+    };
 
-    // Handshake-timeout guard (A12c/A14). A process can accept the WebSocket
-    // and then send nothing — a fake/stale Companion or a port-squatter. With
-    // no timer the panel sits in `connecting` forever. Arm a short timer the
-    // moment the socket is constructed; if no valid `session-meta` arrives, the
-    // socket is closed and the panel surfaces `not-detected`. The timer is
-    // cleared once the handshake completes (below) or `close()` runs.
     this.handshakeTimer = setTimeout(() => {
       this.handshakeTimer = undefined;
       if (this.closed || this.handshakeComplete) return;
@@ -257,28 +368,22 @@ export class CompanionWsTransport implements TerminalTransport {
       );
       if (!frame) return;
 
-      // Handshake validation — the first frame MUST be a session-meta whose
-      // protocolVersion this web app speaks. A socket that cannot complete
-      // this is a fake Companion / port-squatter: treat it as offline (A12c).
       if (!this.handshakeComplete) {
-        // A real Companion that could not spawn `claude` sends a typed `error`
-        // frame BEFORE any session-meta (the spawn fails before the handshake
-        // — bridge.ts ADR-001 "never hard-fail" path). Route its code into the
-        // matching failure state so the panel shows the right guidance, not a
-        // generic "Companion offline".
-        if (frame.t === "error") {
-          if (
-            frame.code === "claude-unusable" ||
-            frame.code === "local-permission-denied"
-          ) {
-            this.setState(frame.code, frame.msg);
+        if (frame.t === "pty.error") {
+          if (frame.code === "spawn-failed") {
+            this.setState("shell-unavailable", frame.detail ?? "");
+          } else if (frame.code === "not-authed") {
+            this.setState("mint-unavailable", frame.detail ?? "");
           } else {
-            this.setState("not-detected", `Companion error: ${frame.code}.`);
+            this.setState(
+              "not-detected",
+              `Companion error: ${frame.code}.`
+            );
           }
           this.close();
           return;
         }
-        if (frame.t !== "session-meta") {
+        if (frame.t !== "hello") {
           this.setState("not-detected", "Companion handshake malformed.");
           this.close();
           return;
@@ -291,39 +396,110 @@ export class CompanionWsTransport implements TerminalTransport {
           this.close();
           return;
         }
-        // A valid session-meta arrived — the handshake is done; disarm the
-        // timeout guard so it cannot reap a healthy connection.
+        // Capability negotiation — intersection drives feature activation.
+        this.capabilities = intersectCapabilities(
+          frame.capabilities,
+          CLIENT_CAPABILITIES
+        );
+        // Epoch tracking — a new epoch invalidates cached pty_ids.
+        const newEpoch = frame.companion_started_at;
+        if (
+          this.companionStartedAt !== undefined &&
+          this.companionStartedAt !== newEpoch
+        ) {
+          // Subscribers are wiped — they must re-open PTYs.
+          this.subscribers.clear();
+        }
+        this.companionStartedAt = newEpoch;
         this.handshakeComplete = true;
         this.clearHandshakeTimer();
-        this.handlers?.onStatus({ state: "connected", sessionId: frame.sessionId });
-      }
-
-      // A post-handshake `error` frame carrying a connection-failure code
-      // means the Companion accepted the socket and sent `session-meta`, then
-      // `claude` died at once (a missing binary fails AFTER spawn on macOS —
-      // bridge.ts `handlePtyExit`). Route the code into the matching failure
-      // state so the panel reaches `claude-unusable` instead of sitting on a
-      // stale `connected`.
-      if (
-        frame.t === "error" &&
-        (frame.code === "claude-unusable" ||
-          frame.code === "local-permission-denied")
-      ) {
-        this.setState(frame.code, frame.msg);
         this.handlers?.onFrame(frame);
-        this.close();
+        this.setState("connected");
         return;
       }
 
+      // Post-handshake — dispatch typed frames.
+      if (frame.t === "pty.opened") {
+        // P1-2: route by request_id when present. Older Companion builds
+        // (pre-fix) don't echo request_id — fall back to the FIFO-shift the
+        // previous protocol assumed, but new clients always send request_id
+        // so this fallback only fires during a rolling protocol-bump and is
+        // safe (the previous behavior is the worst case).
+        const reqId = frame.request_id;
+        const pending =
+          reqId != null
+            ? this.pendingOpens.get(reqId)
+            : firstPending(this.pendingOpens);
+        if (pending) {
+          if (reqId != null) this.pendingOpens.delete(reqId);
+          else deleteFirst(this.pendingOpens);
+          pending.resolve(frame.pty_id);
+        }
+        this.handlers?.onFrame(frame);
+        return;
+      }
+
+      if (frame.t === "pty.error") {
+        // P1-2 (gate-review.md): route the error to the EXACT pending-open
+        // that triggered it via the echoed request_id. Without this, the
+        // previous FIFO shifted the OLDEST pending — wrong for concurrent
+        // opens — and `spawn-failed` didn't shift at all so its open hung.
+        const reqId = frame.request_id;
+        const pending = reqId != null ? this.pendingOpens.get(reqId) : null;
+        if (pending) {
+          this.pendingOpens.delete(reqId!);
+          const detail = frame.detail ? `: ${frame.detail}` : "";
+          if (frame.code === "spawn-failed") {
+            this.setState("shell-unavailable", frame.detail ?? "");
+            pending.reject(new Error(`pty spawn-failed${detail}`));
+          } else if (frame.code === "cap-exceeded") {
+            pending.reject(new Error(`pty cap exceeded${detail}`));
+          } else {
+            pending.reject(new Error(`pty.error ${frame.code}${detail}`));
+          }
+          this.handlers?.onFrame(frame);
+          return;
+        }
+
+        // No matching request_id — this is a broadcast error (bad-frame,
+        // frame-too-large, unknown-pty on a non-open frame, etc.). Surface
+        // via the global toast surface rather than rejecting any specific
+        // pending. spawn-failed without a request_id still routes to the
+        // shell-unavailable state for the pre-fix handshake path.
+        if (frame.code === "spawn-failed") {
+          this.setState("shell-unavailable", frame.detail ?? "");
+        } else {
+          // Defensive: a non-actionable error should not be swallowed
+          // silently — give the operator something to see.
+          try {
+            fireInfoToast(
+              `Terminal error: ${frame.code}${
+                frame.detail ? ` — ${frame.detail}` : ""
+              }`
+            );
+          } catch {
+            /* toast surface not yet registered — non-fatal */
+          }
+        }
+        this.handlers?.onFrame(frame);
+        return;
+      }
+
+      this.dispatchPtyFrame(frame);
       this.handlers?.onFrame(frame);
     });
 
     ws.addEventListener("close", () => {
       if (this.closed) return;
-      // A socket that closed before the handshake never proved itself a real
-      // Companion → offline. After the handshake, a close is a normal end.
       if (!this.handshakeComplete) {
-        this.setState("not-detected", "Companion socket closed before handshake.");
+        this.setState(
+          "not-detected",
+          "Companion socket closed before handshake."
+        );
+      } else {
+        // A post-handshake close means the Companion went away — surface as
+        // not-detected so the panel shows the reconnect-able failure UI.
+        this.setState("not-detected", "Companion socket closed.");
       }
     });
 

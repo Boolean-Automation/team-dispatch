@@ -198,6 +198,28 @@ export const drag = (_p: IconProps) => (
     <circle cx="15" cy="18" r="1.4" />
   </svg>
 );
+// Phase 2 / S3 — popout / dock-toggle icons.
+export const popout = (_p: IconProps) => (
+  <svg className="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M14 4h6v6" />
+    <path d="M20 4l-9 9" />
+    <path d="M19 14v5a1 1 0 01-1 1H5a1 1 0 01-1-1V6a1 1 0 011-1h5" />
+  </svg>
+);
+// `splitH` — horizontal split (panel docked at bottom; two horizontal regions).
+export const splitH = (_p: IconProps) => (
+  <svg className="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="3" y="3" width="18" height="18" rx="1" />
+    <path d="M3 14h18" />
+  </svg>
+);
+// `splitV` — vertical split (panel docked at right; two vertical regions).
+export const splitV = (_p: IconProps) => (
+  <svg className="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="3" y="3" width="18" height="18" rx="1" />
+    <path d="M14 3v18" />
+  </svg>
+);
 
 // Convenience namespace object matching original Ic.* usage pattern
 const Ic = {
@@ -234,6 +256,9 @@ const Ic = {
   power,
   arrow,
   drag,
+  popout,
+  splitH,
+  splitV,
 };
 
 export default Ic;

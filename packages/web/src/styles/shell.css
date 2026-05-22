@@ -493,3 +493,47 @@ a { color: inherit; text-decoration: none; }
 .health.good { color: #6EE7B7; border-color: rgba(16,185,129,0.25); }
 .health.risk { color: #FCD34D; border-color: rgba(251,191,36,0.25); }
 .health.crit { color: #FCA5A5; border-color: rgba(239,68,68,0.30); }
+
+/* ──────────────────────────────────────────────────────────────────────────
+   Phase 2 / Slice 2 — JetBrains Mono self-hosted + terminal tokens.
+   The --font-mono token in :root already names 'JetBrains Mono'; Phase 2
+   self-hosts the woff2 face so we are not dependent on a Google Fonts CDN
+   (CSP-friendly, offline-friendly, ligatures-friendly).
+   ────────────────────────────────────────────────────────────────────────── */
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('/fonts/JetBrainsMono-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('/fonts/JetBrainsMono-Bold.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* Phase 2 terminal CSS tokens (visual-spec §5.1).
+   - --term-launch* is the one sanctioned new accent (the off-emerald
+     power-tool button). The five --term-* tokens below carry the default
+     `coal` theme into the dock chrome so S3 can render the toolbar without
+     duplicating theme values in CSS — themes.ts owns the per-theme set.
+*/
+:root {
+  /* The launcher "power-tool" accent. */
+  --term-launch:    #F59E0B;
+  --term-launch-fg: #FBBF24;
+  --term-launch-bg: rgba(245,158,11,0.12);
+
+  /* Default-theme (coal) surface tokens — match themes.ts `coal` ITheme.
+     S3 will override these on the dock element when the SE picks a non-coal
+     theme. Held at :root for the default; per-instance overrides go on
+     `.term-dock` via inline style or a theme-class. */
+  --term-bg:        #07101F;
+  --term-fg:        #94A3B8;
+  --term-accent:    #10B981;
+  --term-cursor:    #10B981;
+  --term-selection: #1E293B;
+}

@@ -31,6 +31,7 @@ import { RightPanel } from "./RightPanel";
 import type { PanelMode } from "./RightPanel";
 import { RToolbar } from "./RToolbar";
 import { Composer } from "./Composer";
+import { TerminalPanel } from "../terminal/TerminalPanel";
 import { useTicket, useMessages, useTicketActivity, useAccount } from "../lib/queries.js";
 import { useUndoableMutation } from "../lib/use-undoable-mutation.js";
 import { apiClient } from "../lib/api-client.js";
@@ -274,10 +275,12 @@ export function TicketDetailPage() {
           ticket={ticket}
           assigneeName={assigneeName}
           activityItems={activityItems}
-          clientSlug={accountQuery.data?.slug}
         />
         <RToolbar mode={panel} setMode={setPanel} />
       </div>
+      {/* Phase 2 / S3 — bottom-slide-up / dock-right terminal panel. Mounts
+          when the ticket route is active; unmounts on route leave. */}
+      <TerminalPanel ticketId={ticket.displayId} />
     </div>
   );
 }

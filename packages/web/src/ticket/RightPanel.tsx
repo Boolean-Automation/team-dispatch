@@ -1,33 +1,24 @@
-// dispatch — RightPanel: right panel container
+// dispatch — RightPanel: right panel container.
 //
-// Phase-1 scope: "info" and "activity" panel modes.
-// Spike #1 adds the "terminal" mode — the embedded claude-code panel.
-//
-// Ported from ticket-detail.jsx RightPanel; the spike widens PanelMode and
-// adds the PanelTerminal branch.
+// Phase 2 / Slice 3: the Spike #1 "terminal" branch has been retired
+// (visual spec §0, §11.3; OQ-4). PanelMode narrows to `"info" | "activity"`.
+// The terminal surface now lives in `TerminalPanel` at the bottom of the
+// ticket route (default) or docked to the right edge per Settings.
 
 import React from "react";
 import Ic from "../shell/Ic";
 import { PanelInfo } from "./PanelInfo";
 import { PanelActivity } from "./PanelActivity";
-import { PanelTerminal } from "./PanelTerminal";
 import type { ActivityItem } from "./PanelActivity";
 import type { Ticket } from "../lib/types";
 
-export type PanelMode = "info" | "activity" | "terminal";
+export type PanelMode = "info" | "activity";
 
 interface RightPanelProps {
   mode: PanelMode;
   ticket: Ticket;
   assigneeName?: string;
   activityItems?: ActivityItem[];
-  /**
-   * The Account slug for the ticket's client, when `TicketDetailPage` has the
-   * Account loaded. Threaded into the Companion context-injection payload so
-   * the browser path injects the client slug, matching what the headless
-   * capture proved (Codex P2).
-   */
-  clientSlug?: string;
 }
 
 export function RightPanel({
@@ -35,26 +26,16 @@ export function RightPanel({
   ticket,
   assigneeName,
   activityItems = [],
-  clientSlug,
 }: RightPanelProps) {
   let title = "Ticket & client";
   if (mode === "activity") title = "Activity";
-  else if (mode === "terminal") title = "claude-code";
 
   let sub: string = ticket.displayId;
   if (mode === "activity") sub = `${activityItems.length} events`;
-  else if (mode === "terminal") sub = "claude-code";
-
-  // In terminal mode the head is a live connection-state region (visual §2
-  // a11y) — announce changes politely without stealing focus from the panel.
-  const headProps =
-    mode === "terminal"
-      ? ({ role: "status", "aria-live": "polite" } as const)
-      : {};
 
   return (
     <aside className="rpanel">
-      <div className="rpanel-head" {...headProps}>
+      <div className="rpanel-head">
         <span className="title">{title}</span>
         <span className="sub">{sub}</span>
         <span className="spacer"></span>
@@ -69,12 +50,7 @@ export function RightPanel({
         {mode === "info" && (
           <PanelInfo ticket={ticket} assigneeName={assigneeName} />
         )}
-        {mode === "activity" && (
-          <PanelActivity items={activityItems} />
-        )}
-        {mode === "terminal" && (
-          <PanelTerminal ticket={ticket} clientSlug={clientSlug} />
-        )}
+        {mode === "activity" && <PanelActivity items={activityItems} />}
       </div>
     </aside>
   );

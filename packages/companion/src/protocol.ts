@@ -1,106 +1,182 @@
 /**
  * dispatch Companion — WebSocket frame protocol (headless-core contract).
  *
- * This module is the single written-down definition of the Companion ↔ browser
- * channel. The web package re-declares these types locally in
- * `packages/web/src/ticket/companion-protocol.ts` (it must NOT import this
- * package — the lint boundary forbids a web→companion import). Any future
- * Companion MCP inherits this contract verbatim.
+ * Phase 2 — multi-PTY contract. The Companion runs ONE WebSocket per browser
+ * window (singleton). Each WS may own zero or more PTYs, identified by a
+ * server-minted ULID `pty_id`. Every `pty.write` / `pty.resize` / `pty.close`
+ * frame carries the `pty_id` so the bridge can authorize against the
+ * connection-owned registry (Codex F2 — per-frame ownership check).
  *
  * All frames are JSON text frames. The frame `t` discriminator is the type tag.
  *
- *   client → server (browser → Companion):
- *     { "t": "data",   "d": "<utf8 keystrokes>" }
- *     { "t": "resize", "cols": <int>, "rows": <int> }
+ *   client → server:
+ *     { "t": "pty.open",   "ticket_id": "<string>" }
+ *     { "t": "pty.write",  "pty_id": "<ulid>", "data": "<utf8>" }
+ *     { "t": "pty.resize", "pty_id": "<ulid>", "cols": <int>, "rows": <int> }
+ *     { "t": "pty.close",  "pty_id": "<ulid>" }
  *
- *   server → client (Companion → browser):
- *     { "t": "session-meta", "sessionId": "<8hex>", "cmd": "<argv>",
- *       "protocolVersion": <int>, "companionVersion": "<semver>" }
- *     { "t": "data",  "d": "<utf8 pty output>" }
- *     { "t": "error", "code": "<string>", "msg": "<string>" }
- *     { "t": "exit",  "exitCode": <int>, "signal": <int|null> }
+ *   server → client:
+ *     { "t": "hello",       "protocolVersion": <int>, "companionVersion": "<semver>",
+ *                            "capabilities": [...], "companion_started_at": <epoch_ms> }
+ *     { "t": "pty.opened",  "pty_id": "<ulid>" }
+ *     { "t": "pty.data",    "pty_id": "<ulid>", "bytes": "<utf8>" }
+ *     { "t": "pty.exit",    "pty_id": "<ulid>", "code": <int>, "signal": <string|null> }
+ *     { "t": "pty.error",   "code": "<enum>", "pty_id"?: "<ulid>", "detail"?: "<string>" }
  *
- * Bounds (Codex P2 — protocol versioning + bounds):
- *   - PROTOCOL_VERSION — bumped on any breaking frame change. The
- *     `session-meta` frame carries it; a web client that does not speak the
- *     advertised version resolves to the explicit `protocol-mismatch` state.
- *   - MAX_FRAME_BYTES — a single inbound WS frame larger than this is rejected
- *     (not piped into the PTY).
- *   - MAX_PASTE_BYTES — a single `data` frame's payload larger than this is a
- *     paste-cap violation; rejected, not streamed unbounded into the PTY.
+ * Bounds:
+ *   - PROTOCOL_VERSION — bumped on any breaking frame change. Phase 2 = 2.
+ *   - MAX_FRAME_BYTES — a single inbound WS frame larger than this is rejected.
+ *   - MAX_PASTE_BYTES — a single pty.write `data` payload larger than this is
+ *     a paste-cap violation; rejected, not streamed unbounded into the PTY.
  */
 
 import { z } from "zod";
 
-/** Protocol version. Bump on any breaking frame-shape change. */
-export const PROTOCOL_VERSION = 1;
+/** Protocol version. Bumped to 2 for the Phase 2 multi-PTY contract. */
+export const PROTOCOL_VERSION = 2;
 
-/** Companion package version, surfaced in the session-meta handshake frame. */
+/** Companion package version, surfaced in the hello handshake frame. */
 export const COMPANION_VERSION = "0.0.0";
 
 /** Max bytes for a single inbound WebSocket frame. Larger frames are rejected. */
 export const MAX_FRAME_BYTES = 256 * 1024; // 256 KiB
 
-/** Max bytes for a single `data` frame payload (paste cap). */
+/** Max bytes for a single pty.write `data` payload (paste cap). */
 export const MAX_PASTE_BYTES = 64 * 1024; // 64 KiB
 
 // ── Client → server frames ──────────────────────────────────────────────────
 
-export const DataFrameSchema = z.object({
-  t: z.literal("data"),
-  d: z.string(),
+export const PtyOpenFrameSchema = z.object({
+  t: z.literal("pty.open"),
+  ticket_id: z.string().min(1),
+  /**
+   * P1-2 fix (gate-review.md): correlation id minted client-side, echoed back
+   * by the server on the matching `pty.opened` or `pty.error` frame. Lets the
+   * client's `pendingOpens` map route the response to the exact promise that
+   * sent the open — without it, concurrent opens with a `pty.error` in the
+   * middle either hang forever (`spawn-failed` doesn't dequeue) or reject the
+   * wrong promise (`cap-exceeded` FIFO-shifts the oldest). Optional for
+   * backwards-compat with older clients that don't mint one — server still
+   * accepts those frames but the response carries `request_id: null` and the
+   * client routes the error to a broadcast surface.
+   */
+  request_id: z.string().min(1).optional(),
 });
 
-export const ResizeFrameSchema = z.object({
-  t: z.literal("resize"),
+export const PtyWriteFrameSchema = z.object({
+  t: z.literal("pty.write"),
+  pty_id: z.string().min(1),
+  data: z.string(),
+});
+
+export const PtyResizeFrameSchema = z.object({
+  t: z.literal("pty.resize"),
+  pty_id: z.string().min(1),
   cols: z.number().int().positive(),
   rows: z.number().int().positive(),
 });
 
+export const PtyCloseFrameSchema = z.object({
+  t: z.literal("pty.close"),
+  pty_id: z.string().min(1),
+});
+
 /** Any frame the browser may send to the Companion. */
 export const ClientFrameSchema = z.discriminatedUnion("t", [
-  DataFrameSchema,
-  ResizeFrameSchema,
+  PtyOpenFrameSchema,
+  PtyWriteFrameSchema,
+  PtyResizeFrameSchema,
+  PtyCloseFrameSchema,
 ]);
 
 // ── Server → client frames ──────────────────────────────────────────────────
 
-export const SessionMetaFrameSchema = z.object({
-  t: z.literal("session-meta"),
-  sessionId: z.string(),
-  cmd: z.string(),
+/**
+ * The Phase 2 handshake. `capabilities` drives feature-array negotiation;
+ * `companion_started_at` is the epoch-ms at server boot — the client uses it to
+ * detect a Companion restart (a new epoch invalidates all cached pty_ids).
+ */
+export const HelloFrameSchema = z.object({
+  t: z.literal("hello"),
   protocolVersion: z.number().int(),
   companionVersion: z.string(),
+  capabilities: z.array(z.string()),
+  companion_started_at: z.number().int().nonnegative(),
 });
 
-export const ErrorFrameSchema = z.object({
-  t: z.literal("error"),
-  code: z.string(),
-  msg: z.string(),
+export const PtyOpenedFrameSchema = z.object({
+  t: z.literal("pty.opened"),
+  pty_id: z.string().min(1),
+  /**
+   * P1-2 fix: echo of the client's request_id from the corresponding
+   * pty.open. `null` when the inbound frame had no request_id (older clients).
+   */
+  request_id: z.string().min(1).nullable().optional(),
 });
 
-export const ExitFrameSchema = z.object({
-  t: z.literal("exit"),
-  exitCode: z.number().int(),
-  signal: z.number().int().nullable(),
+export const PtyDataFrameSchema = z.object({
+  t: z.literal("pty.data"),
+  pty_id: z.string().min(1),
+  bytes: z.string(),
+});
+
+export const PtyExitFrameSchema = z.object({
+  t: z.literal("pty.exit"),
+  pty_id: z.string().min(1),
+  code: z.number().int(),
+  signal: z.string().nullable(),
+});
+
+/** The closed set of `pty.error` codes the Companion may emit. */
+export const PtyErrorCodeSchema = z.enum([
+  "cap-exceeded",
+  "spawn-failed",
+  "not-authed",
+  "pty-detached",
+  "unknown-pty",
+  "bad-frame",
+  "frame-too-large",
+  "paste-too-large",
+]);
+
+export const PtyErrorFrameSchema = z.object({
+  t: z.literal("pty.error"),
+  code: PtyErrorCodeSchema,
+  pty_id: z.string().min(1).optional(),
+  detail: z.string().optional(),
+  /**
+   * P1-2 fix: correlates this error to the originating client `pty.open` if
+   * the failure was scoped to one — `null`/omitted means "broadcast error"
+   * (bad-frame, frame-too-large, unknown-pty for a non-open frame, etc.) that
+   * the client should surface as a global toast rather than rejecting a
+   * specific pending promise.
+   */
+  request_id: z.string().min(1).nullable().optional(),
 });
 
 /** Any frame the Companion may send to the browser. */
 export const ServerFrameSchema = z.discriminatedUnion("t", [
-  SessionMetaFrameSchema,
-  DataFrameSchema,
-  ErrorFrameSchema,
-  ExitFrameSchema,
+  HelloFrameSchema,
+  PtyOpenedFrameSchema,
+  PtyDataFrameSchema,
+  PtyExitFrameSchema,
+  PtyErrorFrameSchema,
 ]);
 
 // ── Inferred types ──────────────────────────────────────────────────────────
 
-export type DataFrame = z.infer<typeof DataFrameSchema>;
-export type ResizeFrame = z.infer<typeof ResizeFrameSchema>;
+export type PtyOpenFrame = z.infer<typeof PtyOpenFrameSchema>;
+export type PtyWriteFrame = z.infer<typeof PtyWriteFrameSchema>;
+export type PtyResizeFrame = z.infer<typeof PtyResizeFrameSchema>;
+export type PtyCloseFrame = z.infer<typeof PtyCloseFrameSchema>;
 export type ClientFrame = z.infer<typeof ClientFrameSchema>;
-export type SessionMetaFrame = z.infer<typeof SessionMetaFrameSchema>;
-export type ErrorFrame = z.infer<typeof ErrorFrameSchema>;
-export type ExitFrame = z.infer<typeof ExitFrameSchema>;
+
+export type HelloFrame = z.infer<typeof HelloFrameSchema>;
+export type PtyOpenedFrame = z.infer<typeof PtyOpenedFrameSchema>;
+export type PtyDataFrame = z.infer<typeof PtyDataFrameSchema>;
+export type PtyExitFrame = z.infer<typeof PtyExitFrameSchema>;
+export type PtyErrorCode = z.infer<typeof PtyErrorCodeSchema>;
+export type PtyErrorFrame = z.infer<typeof PtyErrorFrameSchema>;
 export type ServerFrame = z.infer<typeof ServerFrameSchema>;
 
 // ── Parse helpers ────────────────────────────────────────────────────────────
@@ -113,7 +189,7 @@ export type ParseClientFrameResult =
  * Parse one raw inbound WS message into a validated ClientFrame.
  * Enforces MAX_FRAME_BYTES and the MAX_PASTE_BYTES paste cap before the frame
  * ever reaches the PTY. A negative result carries a structured error code so
- * the bridge can reply with a matching `error` frame.
+ * the bridge can reply with a matching `pty.error` frame.
  */
 export function parseClientFrame(raw: string): ParseClientFrameResult {
   if (Buffer.byteLength(raw, "utf8") > MAX_FRAME_BYTES) {
@@ -133,8 +209,8 @@ export function parseClientFrame(raw: string): ParseClientFrameResult {
   }
 
   const frame = result.data;
-  if (frame.t === "data" && Buffer.byteLength(frame.d, "utf8") > MAX_PASTE_BYTES) {
-    return { ok: false, code: "paste-too-large", msg: "data frame exceeds MAX_PASTE_BYTES" };
+  if (frame.t === "pty.write" && Buffer.byteLength(frame.data, "utf8") > MAX_PASTE_BYTES) {
+    return { ok: false, code: "paste-too-large", msg: "pty.write data exceeds MAX_PASTE_BYTES" };
   }
 
   return { ok: true, frame };
@@ -143,7 +219,7 @@ export function parseClientFrame(raw: string): ParseClientFrameResult {
 /**
  * Decide whether a web client advertising `clientProtocolVersion` can speak to
  * this Companion. A mismatch routes the web side into the `protocol-mismatch`
- * failure state — it does not silently half-work (Codex P2 / A18 state f).
+ * failure state — it does not silently half-work.
  */
 export function isProtocolCompatible(clientProtocolVersion: number): boolean {
   return clientProtocolVersion === PROTOCOL_VERSION;

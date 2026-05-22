@@ -26,6 +26,10 @@ export function setTokenProvider(fn: TokenProvider): void {
   _tokenProvider = fn;
 }
 
+export function getTokenProvider(): TokenProvider | null {
+  return _tokenProvider;
+}
+
 // ── Internal fetch wrapper ─────────────────────────────────────────────────────
 
 async function apiFetch<T>(

@@ -94,7 +94,7 @@ test.describe("Ticket Detail — fixture path", () => {
     ).toBeVisible();
   });
 
-  test("RToolbar shows Info, claude-code, and Activity icons (Spike #1 wired the terminal)", async ({ page }) => {
+  test("RToolbar shows Info + Activity (Phase 2 retired the Spike #1 claude-code button)", async ({ page }) => {
     const toolbar = page.locator(".r-toolbar");
     await expect(toolbar).toBeVisible();
 
@@ -104,20 +104,21 @@ test.describe("Ticket Detail — fixture path", () => {
     // Activity log button (title="Activity log") from RToolbar.tsx
     await expect(toolbar.locator("[title='Activity log']")).toBeVisible();
 
-    // Spike #1 — the Companion bridge — wires the claude-code (Ic.terminal)
-    // button between Info and Activity. RToolbar.tsx's Phase-1 "do not wire"
-    // placeholder was deliberately replaced. The button MUST now be present.
-    await expect(toolbar.locator("button[title='claude-code']")).toBeVisible();
+    // Phase 2 / Slice 3 retired the Spike #1 `claude-code` (Ic.terminal)
+    // button per the visual spec §0 / OQ-4 — the terminal panel moved to
+    // bottom-slide-up + dock-right (TerminalPanel). The right-panel
+    // toolbar reverts to the Phase-1 Info + Activity scope.
+    await expect(toolbar.locator("button[title='claude-code']")).toHaveCount(0);
 
-    // Order: Info / claude-code / Activity (surface-map toolbar order).
+    // The order of the two ACTIVE buttons: Info before Activity.
     const buttonTitles = await toolbar.locator("button.r-tb").evaluateAll(
       (els) => els.map((el) => el.getAttribute("title"))
     );
     const infoIdx = buttonTitles.indexOf("Ticket & client info");
-    const claudeIdx = buttonTitles.indexOf("claude-code");
     const activityIdx = buttonTitles.indexOf("Activity log");
-    expect(infoIdx).toBeLessThan(claudeIdx);
-    expect(claudeIdx).toBeLessThan(activityIdx);
+    expect(infoIdx).toBeGreaterThan(-1);
+    expect(activityIdx).toBeGreaterThan(-1);
+    expect(infoIdx).toBeLessThan(activityIdx);
   });
 
   test("Phase-3 exclusions: no clock-in or billable controls in the header", async ({ page }) => {

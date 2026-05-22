@@ -1,0 +1,446 @@
+/* dispatch — terminal panel CSS (Phase 2 / Slice 3).
+ *
+ * The bottom-slide-up / dock-right panel surface and all of its chrome. Every
+ * value resolves to an existing :root token from shell.css EXCEPT the single
+ * --term-launch* trio (visual spec §5.1 — the deliberately off-accent power
+ * tool, flagged in §11 #1) and the --term-h / --term-w drag-resize variables.
+ *
+ * Class inventory (visual spec §5):
+ *   .term-panel-bottom / .term-panel-right  — the panel host
+ *   .term-bar                                — the toolbar row (34px)
+ *   .term-launch                             — the launcher pill (S4 fills)
+ *   .term-tabs                               — tab strip container
+ *   .term-tab-pill                           — the one session pill (S6 grows)
+ *   .term-acts                               — right-aligned action cluster
+ *   .term-act                                — toolbar icon button (26×26)
+ *   .term-act.is-stub                        — disabled stub (the `+`)
+ *   .term-stage                              — the xterm host wrapper
+ *   .term-find                               — VS-Code-style find overlay
+ *   .term-detached                           — "popped out" placeholder
+ *   .term-splitter                           — drag-resize handle
+ *   .term-popout-body                        — popout-route body wrapper
+ *
+ * The shipped `.term-fail` failure block at ticket-detail.css:585-622 is
+ * reused verbatim by TerminalPanel (visual spec §5.6).
+ */
+
+/* ── §5.1 The one new accent — the launcher power-tool ─────────────────── */
+:root {
+  --term-launch:    #F59E0B;
+  --term-launch-fg: #FBBF24;
+  --term-launch-bg: rgba(245, 158, 11, 0.12);
+
+  /* Drag-resize cell variables, written to .detail by use-drag-resize. */
+  --term-h: 320px;
+  --term-w: 420px;
+}
+
+/* ── Panel hosts — bottom-slide-up (default) and dock-right ───────────── */
+.term-panel-bottom {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: var(--term-h, 320px);
+  display: flex;
+  flex-direction: column;
+  background: #07101F;
+  border-top: 1px solid var(--border-strong);
+  z-index: 40;
+  transform: translateY(0);
+  transition: transform 160ms ease-out;
+}
+
+.term-panel-bottom.is-closing {
+  transform: translateY(100%);
+}
+
+.term-panel-bottom.is-resizing {
+  transition: none;
+}
+
+.term-panel-right {
+  position: fixed;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: var(--term-w, 420px);
+  display: flex;
+  flex-direction: column;
+  background: #07101F;
+  border-left: 1px solid var(--border-strong);
+  z-index: 40;
+  transition: width 160ms ease-out;
+}
+
+.term-panel-right.is-resizing {
+  transition: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .term-panel-bottom,
+  .term-panel-right {
+    transition: none;
+  }
+}
+
+/* ── §5.2 The drag-resize splitter ─────────────────────────────────────── */
+.term-splitter {
+  flex: 0 0 6px;
+  cursor: ns-resize;
+  position: relative;
+  background: transparent;
+  user-select: none;
+  touch-action: none;
+}
+
+.term-splitter.vert {
+  cursor: ew-resize;
+}
+
+/* Position the bottom splitter at the top edge (resize-from-top). */
+.term-panel-bottom > .term-splitter {
+  position: absolute;
+  top: -3px;
+  left: 0;
+  right: 0;
+  height: 6px;
+  flex: none;
+}
+
+/* Position the right splitter at the left edge (resize-from-left). */
+.term-panel-right > .term-splitter {
+  position: absolute;
+  top: 0;
+  left: -3px;
+  bottom: 0;
+  width: 6px;
+  flex: none;
+}
+
+.term-splitter::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 48px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--border-strong);
+  opacity: 0;
+  transition: opacity 100ms;
+}
+
+.term-splitter:hover::after,
+.term-splitter.is-dragging::after {
+  opacity: 1;
+}
+
+.term-splitter.vert::after {
+  width: 2px;
+  height: 48px;
+}
+
+/* ── §5.3 Toolbar ──────────────────────────────────────────────────────── */
+.term-bar {
+  flex: 0 0 34px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px 0 10px;
+  background: rgba(11, 17, 32, 0.6);
+  border-bottom: 1px solid var(--border);
+}
+
+.term-launch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 9px 0 7px;
+  border-radius: 99px;
+  background: var(--term-launch-bg);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  color: var(--term-launch-fg);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  cursor: pointer;
+}
+
+.term-launch:hover:not(:disabled) {
+  background: rgba(245, 158, 11, 0.18);
+  border-color: rgba(245, 158, 11, 0.5);
+}
+
+.term-launch:disabled,
+.term-launch[aria-disabled="true"] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.term-launch .icon,
+.term-launch .icon-sm {
+  width: 12px;
+  height: 12px;
+}
+
+/* ── Phase 2 / Slice 4 — launcher consent modal (Codex F5) ─────────────── */
+
+.launcher-consent-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+}
+
+.launcher-consent-modal {
+  background: var(--raised, #1E293B);
+  color: var(--text-1, #E5E7EB);
+  border: 1px solid var(--border-strong, #334155);
+  border-radius: var(--r-md, 8px);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+  padding: 24px 24px 18px;
+  max-width: 520px;
+  width: calc(100% - 48px);
+}
+
+.launcher-consent-title {
+  margin: 0 0 12px;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.launcher-consent-body p {
+  margin: 0 0 10px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-2, #CBD5E1);
+}
+
+.launcher-consent-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.term-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+}
+
+.term-tab-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: var(--r-sm);
+  background: var(--raised);
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  max-width: 220px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.term-tab-pill .conn-dot {
+  flex-shrink: 0;
+}
+
+.term-acts {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.term-act {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  color: var(--text-3);
+  border-radius: var(--r-sm);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+.term-act:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.term-act:disabled,
+.term-act.is-stub,
+.term-act[aria-disabled="true"] {
+  color: var(--text-3);
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.term-act:disabled:hover,
+.term-act.is-stub:hover,
+.term-act[aria-disabled="true"]:hover {
+  color: var(--text-3);
+  background: transparent;
+}
+
+.term-act .icon,
+.term-act .icon-sm {
+  width: 15px;
+  height: 15px;
+}
+
+/* ── §5.4 Stage + Find overlay ─────────────────────────────────────────── */
+.term-stage {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  padding: 8px 10px 4px;
+  display: flex;
+  flex-direction: column;
+}
+
+.term-stage .xterm-host {
+  width: 100%;
+  height: 100%;
+  flex: 1;
+  overflow: hidden;
+}
+
+.term-find {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  background: var(--raised);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+
+.term-find input {
+  width: 160px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  padding: 3px 7px;
+  color: var(--text);
+  font-size: 12px;
+  outline: none;
+}
+
+.term-find input:focus {
+  border-color: var(--emerald);
+}
+
+.term-find .count {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-3);
+  min-width: 34px;
+  text-align: center;
+}
+
+.term-find .fbtn {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  color: var(--text-3);
+  border-radius: 3px;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+.term-find .fbtn:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+/* ── §5.5 Popped-out placeholder ───────────────────────────────────────── */
+.term-detached {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--text-3);
+  text-align: center;
+  padding: 28px;
+}
+
+.term-detached .icon,
+.term-detached .icon-sm {
+  width: 24px;
+  height: 24px;
+  color: var(--text-3);
+}
+
+.term-detached .msg {
+  font-size: 11.5px;
+  max-width: 260px;
+}
+
+/* ── Popout-route body — the standalone window's outermost wrap ─────── */
+.term-popout-body {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: #07101F;
+}
+
+.term-popout-body .term-bar {
+  border-bottom: 1px solid var(--border-strong);
+}
+
+/* Opener-closed banner — replaces the toolbar when the opener window dies. */
+.term-popout-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  background: rgba(245, 158, 11, 0.08);
+  border-bottom: 1px solid var(--border-strong);
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+.term-popout-banner .msg {
+  flex: 1;
+}
+
+.term-popout-banner .close {
+  padding: 4px 10px;
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  color: var(--text-2);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.term-popout-banner .close:hover {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+}

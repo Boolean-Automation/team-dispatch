@@ -1,6 +1,18 @@
 # ADR-001 — AI delivery via a local Companion
 
-**Status:** accepted (`/grill` 2026-05-20)
+**Status:** superseded by ADR-007 (`build/dispatch-phase-2-terminal` roundtable, 2026-05-21)
+
+## Supersede note
+
+> The framing below — dispatch as an "embedded Claude window" / an "AI delivery"
+> surface — is **replaced** by ADR-007's embedded local terminal driven by a
+> local Companion. dispatch makes **no AI claim** and holds **no Anthropic
+> credential**. The Companion spawns the SE's **own login shell** (`$SHELL -l`),
+> not `claude` directly. If an SE wants Claude, they run `claude` themselves
+> inside the terminal and device-flow-auth as themselves. The server-side Agent
+> SDK fallback engine described under "Decision" below is **killed** — there is
+> no Boolean-held Console org for interactive or automation AI. ADR-001 stays in
+> the record as immutable history; ADR-007 is the live decision.
 
 ## Context
 

@@ -1,11 +1,9 @@
-// dispatch — RToolbar: right icon toolbar
+// dispatch — RToolbar: right icon toolbar.
 //
-// Phase-1 scope: Info + Activity icons are wired.
-// Spike #1 wires the third button — claude-code (Ic.terminal) — between Info
-// and Activity, matching the surface-map toolbar order.
-// Tertiary icons: linked ticket / files / more — rendered but not wired.
-//
-// Ported from ticket-detail.jsx RToolbar.
+// Phase 2 / Slice 3: the Spike #1 "claude-code" (Ic.terminal) button has been
+// retired — the terminal panel surface moved to bottom-slide-up + dock-right
+// per visual spec §0/§11.3. RToolbar is back to its Phase-1 scope:
+// Info + Activity wired, tertiary icons rendered but not wired.
 
 import React from "react";
 import Ic from "../shell/Ic";
@@ -25,14 +23,6 @@ export function RToolbar({ mode, setMode }: RToolbarProps) {
         onClick={() => setMode("info")}
       >
         <Ic.info />
-      </button>
-
-      <button
-        className={`r-tb ${mode === "terminal" ? "active" : ""}`}
-        title="claude-code"
-        onClick={() => setMode("terminal")}
-      >
-        <Ic.terminal />
       </button>
 
       <button

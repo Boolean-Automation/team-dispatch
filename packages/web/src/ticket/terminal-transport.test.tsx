@@ -1,41 +1,38 @@
-// terminal-transport.test.ts — the degradation-seam proof (A14b).
+// terminal-transport.test.tsx — the Phase 2 multi-PTY degradation-seam proof.
 //
-// The seam is real only if BOTH transports satisfy the SAME `TerminalTransport`
-// type and `PanelTerminal` / `useCompanion` accept either with NO change.
-// This test substitutes the stub fallback transport and asserts:
-//   1. `FallbackTransportStub` and `CompanionWsTransport` are both assignable
-//      to `TerminalTransport` (compile-level — the type accepts the stub).
-//   2. The stub `connect()` resolves to a defined `degraded` state — the
-//      failure path routes INTO the seam, not into a dead end.
-//   3. `CompanionWsTransport` resolves to `not-detected` when no Companion is
-//      reachable — it does not hang or throw (A14 / A12c).
-//   4. `CompanionWsTransport` resolves to `mint-unavailable` when the token
-//      mint fails.
+// The seam is real only if every transport (the real Companion WS transport,
+// the stub fallback transport, and any future implementations) satisfies the
+// SAME `TerminalTransport` type and the panel + popout accept either with no
+// change.
 //
-// A14b's L2 artifact is still captured in the evidence phase — this is
-// supporting evidence that the seam is genuine.
+// This test covers:
+//   1. Both transports are assignable to `TerminalTransport` (type-level).
+//   2. The stub `connect()` resolves to a `degraded` state.
+//   3. `CompanionWsTransport` resolves to `not-detected` when no Companion
+//      answers /healthz; to `mint-unavailable` when the token mint fails;
+//      to `not-detected` after the silent-socket handshake timeout.
 
 import React from "react";
 import { describe, it, expect } from "vitest";
-import { render, screen, cleanup } from "@testing-library/react";
 import type {
   TerminalTransport,
   TransportStatus,
 } from "./terminal-transport.js";
 import { FallbackTransportStub } from "./fallback-transport.stub.js";
 import { CompanionWsTransport } from "./companion-ws-transport.js";
-import { PanelTerminal } from "./PanelTerminal.js";
-import type { Ticket } from "../lib/types";
 
 // ── 1. Both transports satisfy the same interface ────────────────────────────
 
 describe("TerminalTransport seam — type assignability", () => {
   it("FallbackTransportStub is assignable to TerminalTransport", () => {
-    // If this stops compiling, the seam is broken.
     const stub: TerminalTransport = new FallbackTransportStub();
     expect(typeof stub.connect).toBe("function");
     expect(typeof stub.send).toBe("function");
     expect(typeof stub.resize).toBe("function");
+    expect(typeof stub.openPty).toBe("function");
+    expect(typeof stub.subscribe).toBe("function");
+    expect(typeof stub.write).toBe("function");
+    expect(typeof stub.closePty).toBe("function");
     expect(typeof stub.close).toBe("function");
   });
 
@@ -47,6 +44,10 @@ describe("TerminalTransport seam — type assignability", () => {
     expect(typeof real.connect).toBe("function");
     expect(typeof real.send).toBe("function");
     expect(typeof real.resize).toBe("function");
+    expect(typeof real.openPty).toBe("function");
+    expect(typeof real.subscribe).toBe("function");
+    expect(typeof real.write).toBe("function");
+    expect(typeof real.closePty).toBe("function");
     expect(typeof real.close).toBe("function");
   });
 });
@@ -70,13 +71,23 @@ describe("FallbackTransportStub — defined degradation state", () => {
   it("send() throws — there is no Phase-2 engine behind the stub", () => {
     const stub = new FallbackTransportStub();
     stub.connect({ onFrame: () => {}, onStatus: () => {} });
-    expect(() => stub.send({ t: "data", d: "ls\n" })).toThrowError(/Phase 2/);
+    expect(() =>
+      stub.send({ t: "pty.write", pty_id: "p", data: "ls\n" })
+    ).toThrowError(/Phase 2/);
   });
 
-  it("resize() is a defined no-op (does not throw)", () => {
+  it("openPty() rejects — no engine behind the stub", async () => {
     const stub = new FallbackTransportStub();
     stub.connect({ onFrame: () => {}, onStatus: () => {} });
-    expect(() => stub.resize(80, 24)).not.toThrow();
+    await expect(stub.openPty("DSP-2901")).rejects.toThrow(/Phase 2/);
+  });
+
+  it("write/resize/closePty are defined no-ops (do not throw)", () => {
+    const stub = new FallbackTransportStub();
+    stub.connect({ onFrame: () => {}, onStatus: () => {} });
+    expect(() => stub.write("p", "x")).not.toThrow();
+    expect(() => stub.resize("p", 80, 24)).not.toThrow();
+    expect(() => stub.closePty("p")).not.toThrow();
   });
 });
 
@@ -87,7 +98,6 @@ describe("CompanionWsTransport — clean degradation (A14 / A12c)", () => {
     const transport = new CompanionWsTransport({
       ticketId: "DSP-2901",
       origin: "http://localhost:5173",
-      // A token mints fine, but the health probe finds nothing.
       mintToken: async () => ({
         token: "fixture.token.value",
         sessionId: "sess-fixture",
@@ -132,19 +142,10 @@ describe("CompanionWsTransport — clean degradation (A14 / A12c)", () => {
     transport.close();
   });
 
-  // ── Handshake-timeout guard (P1-2) ─────────────────────────────────────────
-  //
-  // A process can accept the WebSocket and then send NOTHING — a fake/stale
-  // Companion or a port-squatter. Without a handshake timer the panel sits in
-  // `connecting` forever (violates A12c/A14 "does not hang"). The transport
-  // must reap a silent socket and surface a failure state within the timeout.
-
   it("resolves to `not-detected` when the socket accepts but stays silent (P1-2)", async () => {
-    // A stub socket: it "opens" (addEventListener wires the listeners) but the
-    // server never sends a `session-meta` — no message events are ever fired.
     let socketClosed = false;
     const silentSocket = {
-      readyState: 1, // OPEN
+      readyState: 1,
       addEventListener: () => {},
       removeEventListener: () => {},
       close: () => {
@@ -163,7 +164,6 @@ describe("CompanionWsTransport — clean degradation (A14 / A12c)", () => {
       }),
       healthProbe: async () => true,
       socketFactory: () => silentSocket as unknown as WebSocket,
-      // Tiny window so the test does not wait the production 5s.
       handshakeTimeoutMs: 150,
     });
 
@@ -172,87 +172,333 @@ describe("CompanionWsTransport — clean degradation (A14 / A12c)", () => {
       transport.connect({
         onFrame: () => {},
         onStatus: (s) => {
-          // `connecting` is the pre-handshake state — wait for the real verdict.
           if (s.state !== "connecting") resolve(s.state);
         },
       });
     });
     const elapsed = Date.now() - start;
 
-    // It did NOT hang — it surfaced a failure state within the timeout window
-    // (plus a generous margin for the mint/health async hops).
     expect(state).toBe("not-detected");
     expect(elapsed).toBeLessThan(2000);
-    // The silent socket was closed by the timeout guard.
     expect(socketClosed).toBe(true);
     transport.close();
   });
 });
 
-// ── 5. PanelTerminal accepts the stub transport UNMODIFIED (A14b) ────────────
+// ── 5. Phase 2 multi-PTY frame handling ──────────────────────────────────────
 
-const FIXTURE_TICKET: Ticket = {
-  id: "tkt-fixture-0001",
-  displayId: "DSP-2901",
-  accountId: "acct-fixture-0001",
-  clientName: "ProRise Painting",
-  clientHealth: "good",
-  status: "on-you",
-  type: "question",
-  assignee: null,
-  effortBucket: "client-specific",
-  sourceKind: "channel",
-  originClass: "client",
-  preview: "fixture",
-  ageMin: 12,
-  slaMin: null,
-  paused: false,
-  openedAt: new Date().toISOString(),
-};
-
-/** A minimal injectable transport that resolves to a fixed state. */
-class FixedStateTransport implements TerminalTransport {
-  constructor(private readonly state: TransportStatus["state"]) {}
-  connect(handlers: { onStatus: (s: TransportStatus) => void }): void {
-    handlers.onStatus({ state: this.state });
+describe("CompanionWsTransport — Phase 2 multi-PTY frames", () => {
+  /**
+   * A stub socket whose `addEventListener` records the message handler so the
+   * test can simulate inbound frames. The handshake is completed by firing a
+   * synthetic `hello` frame on the captured handler.
+   */
+  function makeRecordingSocket() {
+    const listeners: Record<string, ((ev: unknown) => void)[]> = {
+      message: [],
+      open: [],
+      close: [],
+      error: [],
+    };
+    const sent: string[] = [];
+    const sock = {
+      readyState: 1,
+      addEventListener(ev: string, fn: (ev: unknown) => void) {
+        (listeners[ev] ?? (listeners[ev] = [])).push(fn);
+      },
+      removeEventListener() {},
+      close() {
+        sock.readyState = 3;
+      },
+      send(data: string) {
+        sent.push(data);
+      },
+      _emit(ev: string, payload: unknown) {
+        for (const l of listeners[ev] ?? []) l(payload);
+      },
+    };
+    return { sock, sent, listeners };
   }
-  send(): void {}
-  resize(): void {}
-  close(): void {}
-}
 
-describe("PanelTerminal — accepts the stub fallback transport unmodified (A14b)", () => {
-  it("renders a defined `degraded` fallback block when handed the stub", async () => {
-    // The whole seam proof: PanelTerminal takes a `TerminalTransport` prop. We
-    // hand it the FallbackTransportStub — the SAME component, no change — and
-    // it renders the defined degradation UI, not a crash, not a dead end.
-    const stub: TerminalTransport = new FallbackTransportStub();
-    render(<PanelTerminal ticket={FIXTURE_TICKET} transport={stub} />);
+  it("intersects capabilities and dispatches pty.data to subscribers", async () => {
+    const { sock } = makeRecordingSocket();
+    const transport = new CompanionWsTransport({
+      ticketId: "DSP-2901",
+      origin: "http://localhost:5173",
+      mintToken: async () => ({
+        token: "tok",
+        sessionId: "sess-x",
+        port: 7720,
+      }),
+      healthProbe: async () => true,
+      socketFactory: () => sock as unknown as WebSocket,
+    });
 
-    // The degraded state's failure block is rendered (a defined fallback UI —
-    // the failure path routes INTO the seam). Query the title specifically.
-    const title = await screen.findByText("Running in fallback mode");
-    expect(title.className).toBe("ttl");
-    cleanup();
+    let connectedStatus: TransportStatus | null = null;
+    transport.connect({
+      onFrame: () => {},
+      onStatus: (s) => {
+        if (s.state === "connected") connectedStatus = s;
+      },
+    });
+
+    // Wait one microtask tick so the mint/health promises resolve.
+    await new Promise<void>((r) => setTimeout(r, 0));
+    await new Promise<void>((r) => setTimeout(r, 0));
+
+    // Server sends `hello`.
+    sock._emit("message", {
+      data: JSON.stringify({
+        t: "hello",
+        protocolVersion: 2,
+        companionVersion: "0.1.0",
+        capabilities: ["unicode11", "search", "ligatures", "weblinks", "serialize"],
+        companion_started_at: 1_000_000,
+      }),
+    });
+
+    expect(connectedStatus).toBeTruthy();
+    expect(connectedStatus!.capabilities).toEqual(
+      expect.arrayContaining(["unicode11", "search", "ligatures"])
+    );
+    expect(connectedStatus!.companionStartedAt).toBe(1_000_000);
+
+    // Subscribe to a pty and emit a pty.data — listener should fire.
+    const received: { kind: string; pty_id: string }[] = [];
+    const unsub = transport.subscribe("pty-xxx", (f) => {
+      received.push({ kind: f.kind, pty_id: f.pty_id });
+    });
+
+    sock._emit("message", {
+      data: JSON.stringify({
+        t: "pty.data",
+        pty_id: "pty-xxx",
+        bytes: "hello",
+      }),
+    });
+
+    expect(received).toEqual([{ kind: "pty.data", pty_id: "pty-xxx" }]);
+    unsub();
+    transport.close();
   });
 
-  it("renders the not-detected failure block with a wired Retry (A14)", async () => {
-    // When no Companion is reachable the panel must reach a clean failure
-    // state with a wired Retry — it does not hang, spin, or throw.
-    const transport: TerminalTransport = new FixedStateTransport("not-detected");
-    render(<PanelTerminal ticket={FIXTURE_TICKET} transport={transport} />);
+  it("openPty() resolves on pty.opened and write() emits pty.write", async () => {
+    const { sock, sent } = makeRecordingSocket();
+    const transport = new CompanionWsTransport({
+      ticketId: "DSP-2901",
+      origin: "http://localhost:5173",
+      mintToken: async () => ({
+        token: "tok",
+        sessionId: "sess-x",
+        port: 7720,
+      }),
+      healthProbe: async () => true,
+      socketFactory: () => sock as unknown as WebSocket,
+    });
 
-    expect(await screen.findByText("Companion isn't running")).toBeTruthy();
-    expect(
-      screen.getByRole("button", { name: /retry connection/i })
-    ).toBeTruthy();
-    cleanup();
+    transport.connect({ onFrame: () => {}, onStatus: () => {} });
+    await new Promise<void>((r) => setTimeout(r, 0));
+    await new Promise<void>((r) => setTimeout(r, 0));
+
+    sock._emit("message", {
+      data: JSON.stringify({
+        t: "hello",
+        protocolVersion: 2,
+        companionVersion: "0.1.0",
+        capabilities: [],
+        companion_started_at: 1_000_000,
+      }),
+    });
+
+    const openP = transport.openPty("DSP-2901");
+    // The transport should have written a pty.open frame to the WS.
+    expect(sent.some((s) => s.includes('"pty.open"'))).toBe(true);
+
+    sock._emit("message", {
+      data: JSON.stringify({ t: "pty.opened", pty_id: "pty-y" }),
+    });
+    const pid = await openP;
+    expect(pid).toBe("pty-y");
+
+    transport.write("pty-y", "ls\r");
+    expect(sent.some((s) => s.includes('"pty.write"') && s.includes("ls\\r"))).toBe(
+      true
+    );
+
+    transport.close();
   });
 
-  it("renders the claude-unusable failure block for state (c)", async () => {
-    const transport: TerminalTransport = new FixedStateTransport("claude-unusable");
-    render(<PanelTerminal ticket={FIXTURE_TICKET} transport={transport} />);
-    expect(await screen.findByText("Claude Code needs attention")).toBeTruthy();
-    cleanup();
+  it("P1-2: pty.error with request_id rejects ONLY the matching pending; others stay pending", async () => {
+    // Three concurrent pty.open calls fly out; the Companion responds with a
+    // pty.error for the MIDDLE one. Only the middle promise should reject;
+    // the other two must remain pending until their own correlated responses
+    // arrive. The pre-fix FIFO would have shifted the OLDEST (wrong) or hung
+    // forever (spawn-failed) — both broken behaviors.
+    const { sock, sent } = makeRecordingSocket();
+    const transport = new CompanionWsTransport({
+      ticketId: "DSP-2901",
+      origin: "http://localhost:5173",
+      mintToken: async () => ({
+        token: "tok",
+        sessionId: "sess-x",
+        port: 7720,
+      }),
+      healthProbe: async () => true,
+      socketFactory: () => sock as unknown as WebSocket,
+    });
+
+    transport.connect({ onFrame: () => {}, onStatus: () => {} });
+    await new Promise<void>((r) => setTimeout(r, 0));
+    await new Promise<void>((r) => setTimeout(r, 0));
+
+    sock._emit("message", {
+      data: JSON.stringify({
+        t: "hello",
+        protocolVersion: 2,
+        companionVersion: "0.1.0",
+        capabilities: [],
+        companion_started_at: 1_000_000,
+      }),
+    });
+
+    // Fire three opens in parallel.
+    const p1 = transport.openPty("DSP-2901");
+    const p2 = transport.openPty("DSP-2901");
+    const p3 = transport.openPty("DSP-2901");
+
+    // Inspect the sent frames to pluck each frame's request_id (the server
+    // would echo this back — we just need to know what to send).
+    const openFrames = sent
+      .filter((s) => s.includes('"pty.open"'))
+      .map((s) => JSON.parse(s) as { request_id: string });
+    expect(openFrames.length).toBe(3);
+    const [, midReq] = openFrames; // the second open's correlation id
+
+    // Server emits a pty.error correlated to the MIDDLE open's request_id.
+    sock._emit("message", {
+      data: JSON.stringify({
+        t: "pty.error",
+        code: "cap-exceeded",
+        detail: "ticket at cap",
+        request_id: midReq.request_id,
+      }),
+    });
+
+    // The middle promise rejects.
+    await expect(p2).rejects.toThrow(/cap exceeded/);
+
+    // p1 and p3 are still pending — they have NOT been touched by the middle
+    // error. We confirm by racing them against a short timer.
+    const stillPending = await Promise.race([
+      Promise.allSettled([p1, p3]).then(() => "settled"),
+      new Promise<string>((r) => setTimeout(() => r("still-pending"), 30)),
+    ]);
+    expect(stillPending).toBe("still-pending");
+
+    // Now resolve p1 and p3 to clean up.
+    sock._emit("message", {
+      data: JSON.stringify({
+        t: "pty.opened",
+        pty_id: "pty-1",
+        request_id: openFrames[0].request_id,
+      }),
+    });
+    sock._emit("message", {
+      data: JSON.stringify({
+        t: "pty.opened",
+        pty_id: "pty-3",
+        request_id: openFrames[2].request_id,
+      }),
+    });
+    await expect(p1).resolves.toBe("pty-1");
+    await expect(p3).resolves.toBe("pty-3");
+
+    transport.close();
+  });
+
+  it("P1-2: spawn-failed correlated to the in-flight open REJECTS that open (no hang)", async () => {
+    // The pre-fix hang: spawn-failed didn't shift the FIFO, so the in-flight
+    // openPty() promise hung forever. With correlation ids, the matching
+    // pending rejects deterministically.
+    const { sock, sent } = makeRecordingSocket();
+    const transport = new CompanionWsTransport({
+      ticketId: "DSP-2901",
+      origin: "http://localhost:5173",
+      mintToken: async () => ({
+        token: "tok",
+        sessionId: "sess-x",
+        port: 7720,
+      }),
+      healthProbe: async () => true,
+      socketFactory: () => sock as unknown as WebSocket,
+    });
+
+    transport.connect({ onFrame: () => {}, onStatus: () => {} });
+    await new Promise<void>((r) => setTimeout(r, 0));
+    await new Promise<void>((r) => setTimeout(r, 0));
+
+    sock._emit("message", {
+      data: JSON.stringify({
+        t: "hello",
+        protocolVersion: 2,
+        companionVersion: "0.1.0",
+        capabilities: [],
+        companion_started_at: 1_000_000,
+      }),
+    });
+
+    const pending = transport.openPty("DSP-2901");
+    const openFrame = JSON.parse(
+      sent.find((s) => s.includes('"pty.open"'))!
+    ) as { request_id: string };
+
+    sock._emit("message", {
+      data: JSON.stringify({
+        t: "pty.error",
+        code: "spawn-failed",
+        detail: "exec /bin/zsh: not found",
+        request_id: openFrame.request_id,
+      }),
+    });
+
+    await expect(pending).rejects.toThrow(/spawn-failed/);
+    transport.close();
+  });
+
+  it("routes pty.error spawn-failed to the shell-unavailable state", async () => {
+    const { sock } = makeRecordingSocket();
+    const transport = new CompanionWsTransport({
+      ticketId: "DSP-2901",
+      origin: "http://localhost:5173",
+      mintToken: async () => ({
+        token: "tok",
+        sessionId: "sess-x",
+        port: 7720,
+      }),
+      healthProbe: async () => true,
+      socketFactory: () => sock as unknown as WebSocket,
+    });
+
+    const states: string[] = [];
+    transport.connect({
+      onFrame: () => {},
+      onStatus: (s) => {
+        states.push(s.state);
+      },
+    });
+    await new Promise<void>((r) => setTimeout(r, 0));
+    await new Promise<void>((r) => setTimeout(r, 0));
+
+    // Server sends a pre-handshake pty.error with spawn-failed.
+    sock._emit("message", {
+      data: JSON.stringify({
+        t: "pty.error",
+        code: "spawn-failed",
+        detail: "exec /bin/zsh: not found",
+      }),
+    });
+
+    expect(states).toContain("shell-unavailable");
+    transport.close();
   });
 });

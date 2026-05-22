@@ -11,16 +11,37 @@ import type { MutationOptions } from "@tanstack/react-query";
 // Toast event bus — web-only, no core dependency
 // Components subscribe to this to show the UndoToast
 type UndoToastHandler = (token: string, label: string) => void;
+type InfoToastHandler = (message: string) => void;
 
 let _undoToastHandler: UndoToastHandler | null = null;
+let _infoToastHandler: InfoToastHandler | null = null;
 
 export function registerUndoToastHandler(handler: UndoToastHandler): void {
   _undoToastHandler = handler;
 }
 
+/**
+ * Register a handler for no-button informational toasts. Same visual surface
+ * as the undo toast (top-of-viewport, auto-dismissing), but no Undo button —
+ * used by failure paths that aren't undoable (e.g. PTY-cap exceeded).
+ */
+export function registerInfoToastHandler(handler: InfoToastHandler): void {
+  _infoToastHandler = handler;
+}
+
 function fireUndoToast(token: string, label: string): void {
   if (_undoToastHandler) {
     _undoToastHandler(token, label);
+  }
+}
+
+/**
+ * Fire an info toast (no Undo button). The UndoToast component renders it
+ * with the same auto-dismiss window. A no-op when no handler is registered.
+ */
+export function fireInfoToast(message: string): void {
+  if (_infoToastHandler) {
+    _infoToastHandler(message);
   }
 }
 

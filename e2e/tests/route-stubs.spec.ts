@@ -56,8 +56,18 @@ test.describe("Settings stub page (Surface 4)", () => {
     await expect(page.locator(".trig-canvas")).not.toBeVisible();
     await expect(page.locator(".rule-stack")).not.toBeVisible();
 
-    // Phase-1 placeholder text must be present
-    await expect(page.getByText(/coming in a later phase/i)).toBeVisible();
+    // Phase 2 / S5 lifted the Settings shell into a real 264px nav + tab
+    // body. `/settings` redirects to `/settings/terminal` (the only enabled
+    // tab in Phase 2); other tabs (Triggers / Team / Connections / Profile)
+    // render as `.nav-item.is-stub` disabled — they REPLACED the Phase-1
+    // "coming in a later phase" full-page placeholder. Asserting the stub
+    // items proves the deferred-Trigger-builder posture is intact.
+    await expect(
+      page.locator('[data-testid="settings-nav-triggers"]')
+    ).toHaveClass(/is-stub/);
+    await expect(
+      page.locator('[data-testid="settings-nav-team"]')
+    ).toHaveClass(/is-stub/);
   });
 });
 
