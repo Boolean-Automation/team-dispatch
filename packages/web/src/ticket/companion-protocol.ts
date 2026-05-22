@@ -25,6 +25,14 @@ export const MAX_PASTE_BYTES = 64 * 1024;
 export interface PtyOpenFrame {
   t: "pty.open";
   ticket_id: string;
+  /**
+   * P1-2 fix (gate-review.md): client-minted correlation id. The Companion
+   * echoes this on the matching `pty.opened` or `pty.error` so the client
+   * routes the response to the exact pending-open it correlates with. Without
+   * this, three parallel opens + one error in the middle would either hang
+   * forever or reject the wrong promise.
+   */
+  request_id?: string;
 }
 
 export interface PtyWriteFrame {
@@ -65,6 +73,8 @@ export interface HelloFrame {
 export interface PtyOpenedFrame {
   t: "pty.opened";
   pty_id: string;
+  /** P1-2: echo of the client's request_id (null when none was supplied). */
+  request_id?: string | null;
 }
 
 export interface PtyDataFrame {
@@ -97,6 +107,14 @@ export interface PtyErrorFrame {
   code: PtyErrorCode;
   pty_id?: string;
   detail?: string;
+  /**
+   * P1-2: when present, this error is the failure-response to a specific
+   * client `pty.open`. The client routes it to the matching pending-open and
+   * rejects only that promise. When `null`/absent, the error is a "broadcast"
+   * (bad-frame, frame-too-large, unknown-pty for a non-open frame) and the
+   * client surfaces it via a global toast rather than rejecting any pending.
+   */
+  request_id?: string | null;
 }
 
 export type ServerFrame =

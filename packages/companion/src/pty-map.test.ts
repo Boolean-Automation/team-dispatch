@@ -212,3 +212,139 @@ describe("pty-map — delete", () => {
     expect(map.countActive()).toBe(0);
   });
 });
+
+describe("pty-map — P1-1 race: WS disconnects mid-`pty.open` (gate-review)", () => {
+  // The hostile sequence the gate review surfaced:
+  //   1. Client sends pty.open. Bridge enters the IIFE, awaits the per-ticket
+  //      mutex (here simulated by a held promise we resolve manually).
+  //   2. WS closes; bridge fires markDetached(connId). The map iterates its
+  //      entries — but the NEW one hasn't been inserted yet — so nothing is
+  //      stamped.
+  //   3. Mutex resolves; the IIFE inserts the new entry with wsClosedAt:null.
+  //   4. Sweeper's gate `wsClosedAt !== null && ...` skips this entry FOREVER.
+  //
+  // Fix: pty-map.open() asks `isConnectionAttached(connId)` AFTER the insert.
+  // If the connection is detached at that moment, wsClosedAt is stamped to
+  // `now()` so the sweeper takes over after idleMs.
+
+  it("stamps wsClosedAt on the new entry when the owning connection is detached during open()", async () => {
+    const map = createPtyMap();
+    let attached = true; // flipped by the test to simulate the WS close.
+
+    // A spawn-blocker we control — emulates the slow node-pty fork that lets
+    // the WS close fire BEFORE the entry is inserted. The lock + the spawn
+    // promise together make the race deterministic.
+    let releaseSpawn: () => void = () => {};
+    const spawnBlocker = new Promise<void>((resolve) => {
+      releaseSpawn = resolve;
+    });
+    const slowSpawn: PtySessionFactory = () => {
+      // We can't return a Promise from PtySessionFactory (it's sync); the
+      // realistic shape is "spawn returns instantly, but the markDetached fire
+      // already ran". We model that by toggling `attached` to false BEFORE
+      // releasing the awaited mutex below. The test verifies the post-insert
+      // attachment check stamps wsClosedAt regardless of spawn timing.
+      return fakeSession();
+    };
+
+    // Hold the per-ticket mutex with a long-running open we'll release later.
+    // We use the SAME ticket so the second open queues behind it.
+    const mutexHolder = map.open({
+      ticket_id: "DSP-RACE",
+      ownerConnectionId: "conn-OTHER", // different conn so this isn't our subject
+      spawn: slowSpawn,
+    });
+    await mutexHolder; // returns immediately since spawn is sync; mutex frees.
+    void spawnBlocker; // satisfy unused-var lint without weakening the test
+    void releaseSpawn;
+
+    // Now the real race: imagine markDetached fires BEFORE the open completes.
+    // The map exposes the attachment-check seam so the bridge can answer
+    // "is this connection still alive?" — we wire it to our `attached` flag.
+    // We also call markDetached up front (no-op since the entry doesn't exist
+    // yet) to mirror the real bridge flow.
+    map.markDetached("conn-DETACHED", () => 5_000);
+    attached = false;
+
+    let stampClockCalls = 0;
+    const result = await map.open({
+      ticket_id: "DSP-RACE",
+      ownerConnectionId: "conn-DETACHED",
+      spawn: slowSpawn,
+      clock: () => {
+        stampClockCalls++;
+        return 7_500;
+      },
+      isConnectionAttached: (cid) => {
+        expect(cid).toBe("conn-DETACHED");
+        return attached; // false at this point
+      },
+    });
+
+    if (!result.ok) throw new Error("open should have succeeded");
+    const entry = map.get(result.pty_id)!;
+    // The fix: even though markDetached found no entries when it ran, the
+    // post-insert attachment check stamped wsClosedAt so the sweeper will
+    // reap this orphan.
+    expect(entry.wsClosedAt).toBe(7_500);
+    // The clock was sampled at least once (for lastIoAt) and again for the
+    // wsClosedAt stamp on the detached path.
+    expect(stampClockCalls).toBeGreaterThanOrEqual(2);
+  });
+
+  it("leaves wsClosedAt=null when the connection is still attached at insert time", async () => {
+    const map = createPtyMap();
+    const result = await map.open({
+      ticket_id: "DSP-OK",
+      ownerConnectionId: "conn-ALIVE",
+      spawn: fakeSpawn,
+      isConnectionAttached: () => true,
+    });
+    if (!result.ok) throw new Error("open should have succeeded");
+    expect(map.get(result.pty_id)!.wsClosedAt).toBeNull();
+  });
+
+  it("the sweeper-shaped check reaps the race-orphan after idleMs", async () => {
+    // End-to-end shape: a race-orphan with wsClosedAt stamped at t=5000 must
+    // be reaped by the sweeper at t=5000+idleMs. This proves the fix closes
+    // the loop end-to-end, not just at the map boundary.
+    const map = createPtyMap();
+    let now = 5_000;
+    const result = await map.open({
+      ticket_id: "DSP-RACE-E2E",
+      ownerConnectionId: "conn-DEAD",
+      spawn: fakeSpawn,
+      clock: () => now,
+      isConnectionAttached: () => false, // detached at insert
+    });
+    if (!result.ok) throw new Error("open should have succeeded");
+    expect(map.get(result.pty_id)!.wsClosedAt).toBe(5_000);
+
+    // Idle sweeper's gate is `wsClosedAt + idleMs < now`. Simulate idleMs=300s.
+    const idleMs = 300_000;
+    const reaped: string[] = [];
+    function sweeperTickOnce(): void {
+      const toReap: string[] = [];
+      map.forEach((entry) => {
+        if (entry.wsClosedAt !== null && entry.wsClosedAt + idleMs < now) {
+          toReap.push(entry.pty_id);
+        }
+      });
+      for (const pid of toReap) {
+        map.delete(pid);
+        reaped.push(pid);
+      }
+    }
+    // Tick under the threshold — must NOT reap.
+    now = 5_000 + idleMs;
+    sweeperTickOnce();
+    expect(reaped).toEqual([]);
+    expect(map.get(result.pty_id)).toBeDefined();
+
+    // Tick PAST the threshold — must reap.
+    now = 5_000 + idleMs + 1;
+    sweeperTickOnce();
+    expect(reaped).toContain(result.pty_id);
+    expect(map.get(result.pty_id)).toBeUndefined();
+  });
+});

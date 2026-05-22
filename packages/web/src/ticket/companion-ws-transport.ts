@@ -29,6 +29,7 @@ import {
   type ServerFrame,
 } from "./companion-protocol.js";
 import { apiClient } from "../lib/api-client.js";
+import { fireInfoToast } from "../lib/use-undoable-mutation.js";
 
 /** Default fixed loopback port the Companion listens on. */
 const DEFAULT_COMPANION_PORT = 7720;
@@ -99,6 +100,30 @@ interface PendingOpen {
 }
 
 /**
+ * P1-2 fix: monotonic counter for request_id minting. ULID would also work but
+ * a counter keeps the WS frames a few bytes smaller per open and the values
+ * scoped to this transport are guaranteed-unique. Reset on each transport
+ * (one per panel session) — no cross-transport collision risk.
+ */
+let _nextRequestId = 0;
+function mintRequestId(): string {
+  _nextRequestId = (_nextRequestId + 1) >>> 0;
+  return `req-${_nextRequestId}`;
+}
+
+/** Map.values().next() — typed helper for first-insert-order entry. */
+function firstPending(m: Map<string, PendingOpen>): PendingOpen | null {
+  const it = m.values().next();
+  return it.done ? null : it.value;
+}
+
+/** Delete the first-insert-order key from a Map. */
+function deleteFirst(m: Map<string, PendingOpen>): void {
+  const it = m.keys().next();
+  if (!it.done) m.delete(it.value);
+}
+
+/**
  * The real Companion WebSocket transport. One per panel session.
  */
 export class CompanionWsTransport implements TerminalTransport {
@@ -125,8 +150,16 @@ export class CompanionWsTransport implements TerminalTransport {
 
   /** Per-pty subscribers, keyed by pty_id. */
   private subscribers = new Map<string, Set<(f: PtyFrame) => void>>();
-  /** Pending pty.open awaiters — resolved on the next pty.opened. */
-  private pendingOpens: PendingOpen[] = [];
+  /**
+   * P1-2 fix (gate-review.md): pending pty.open awaiters, keyed by the
+   * client-minted `request_id` that was sent on the open frame. The map shape
+   * (vs. the previous FIFO array) is load-bearing — a `pty.error` for a
+   * specific request_id rejects ONLY that pending promise, leaving any other
+   * concurrent opens untouched. The previous FIFO `cap-exceeded` shift
+   * rejected the wrong pending when multi-PTY opens were in flight, and
+   * `spawn-failed` didn't shift the queue at all so its open hung forever.
+   */
+  private pendingOpens = new Map<string, PendingOpen>();
 
   /** Latest status (so we can re-emit when subscribers attach). */
   private currentStatus: TransportStatus = { state: "idle" };
@@ -165,9 +198,13 @@ export class CompanionWsTransport implements TerminalTransport {
       // `connected` — this guard is defense in depth.
       throw new Error("transport not yet handshaken");
     }
+    // P1-2: mint a per-request correlation id. The server echoes it back on
+    // `pty.opened` or `pty.error` so we route the resolution to the EXACT
+    // pending promise this open corresponds to.
+    const requestId = mintRequestId();
     return new Promise<string>((resolve, reject) => {
-      this.pendingOpens.push({ ticketId, resolve, reject });
-      this.send({ t: "pty.open", ticket_id: ticketId });
+      this.pendingOpens.set(requestId, { ticketId, resolve, reject });
+      this.send({ t: "pty.open", ticket_id: ticketId, request_id: requestId });
     });
   }
 
@@ -203,10 +240,10 @@ export class CompanionWsTransport implements TerminalTransport {
     this.closed = true;
     this.clearHandshakeTimer();
     // Reject any pending opens — the transport is going down.
-    for (const p of this.pendingOpens) {
+    for (const p of this.pendingOpens.values()) {
       p.reject(new Error("transport closed"));
     }
-    this.pendingOpens = [];
+    this.pendingOpens.clear();
     this.subscribers.clear();
     if (this.ws) {
       try {
@@ -383,8 +420,19 @@ export class CompanionWsTransport implements TerminalTransport {
 
       // Post-handshake — dispatch typed frames.
       if (frame.t === "pty.opened") {
-        const pending = this.pendingOpens.shift();
+        // P1-2: route by request_id when present. Older Companion builds
+        // (pre-fix) don't echo request_id — fall back to the FIFO-shift the
+        // previous protocol assumed, but new clients always send request_id
+        // so this fallback only fires during a rolling protocol-bump and is
+        // safe (the previous behavior is the worst case).
+        const reqId = frame.request_id;
+        const pending =
+          reqId != null
+            ? this.pendingOpens.get(reqId)
+            : firstPending(this.pendingOpens);
         if (pending) {
+          if (reqId != null) this.pendingOpens.delete(reqId);
+          else deleteFirst(this.pendingOpens);
           pending.resolve(frame.pty_id);
         }
         this.handlers?.onFrame(frame);
@@ -392,16 +440,45 @@ export class CompanionWsTransport implements TerminalTransport {
       }
 
       if (frame.t === "pty.error") {
-        if (frame.code === "spawn-failed") {
-          this.setState("shell-unavailable", frame.detail ?? "");
+        // P1-2 (gate-review.md): route the error to the EXACT pending-open
+        // that triggered it via the echoed request_id. Without this, the
+        // previous FIFO shifted the OLDEST pending — wrong for concurrent
+        // opens — and `spawn-failed` didn't shift at all so its open hung.
+        const reqId = frame.request_id;
+        const pending = reqId != null ? this.pendingOpens.get(reqId) : null;
+        if (pending) {
+          this.pendingOpens.delete(reqId!);
+          const detail = frame.detail ? `: ${frame.detail}` : "";
+          if (frame.code === "spawn-failed") {
+            this.setState("shell-unavailable", frame.detail ?? "");
+            pending.reject(new Error(`pty spawn-failed${detail}`));
+          } else if (frame.code === "cap-exceeded") {
+            pending.reject(new Error(`pty cap exceeded${detail}`));
+          } else {
+            pending.reject(new Error(`pty.error ${frame.code}${detail}`));
+          }
           this.handlers?.onFrame(frame);
           return;
         }
-        if (frame.code === "cap-exceeded") {
-          // Reject the most-recent pending open (the one that hit the cap).
-          const pending = this.pendingOpens.shift();
-          if (pending) {
-            pending.reject(new Error(`pty cap exceeded: ${frame.detail ?? ""}`));
+
+        // No matching request_id — this is a broadcast error (bad-frame,
+        // frame-too-large, unknown-pty on a non-open frame, etc.). Surface
+        // via the global toast surface rather than rejecting any specific
+        // pending. spawn-failed without a request_id still routes to the
+        // shell-unavailable state for the pre-fix handshake path.
+        if (frame.code === "spawn-failed") {
+          this.setState("shell-unavailable", frame.detail ?? "");
+        } else {
+          // Defensive: a non-actionable error should not be swallowed
+          // silently — give the operator something to see.
+          try {
+            fireInfoToast(
+              `Terminal error: ${frame.code}${
+                frame.detail ? ` — ${frame.detail}` : ""
+              }`
+            );
+          } catch {
+            /* toast surface not yet registered — non-fatal */
           }
         }
         this.handlers?.onFrame(frame);

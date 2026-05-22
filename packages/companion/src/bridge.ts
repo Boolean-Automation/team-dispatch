@@ -99,12 +99,22 @@ export function attachBridge(
   function sendError(
     code: PtyErrorCode,
     pty_id?: string,
-    detail?: string
+    detail?: string,
+    request_id?: string | null
   ): void {
-    const frame: ServerFrame = pty_id
-      ? { t: "pty.error", code, pty_id, ...(detail ? { detail } : {}) }
-      : { t: "pty.error", code, ...(detail ? { detail } : {}) };
-    sendFrame(frame);
+    // P1-2 (gate-review.md): when the error is scoped to a specific client
+    // request (an in-flight `pty.open`), we echo the originating request_id so
+    // the client's pendingOpens Map can route the rejection to the exact
+    // promise that sent it. Broadcast errors (bad-frame, frame-too-large,
+    // unknown-pty for a non-open frame) leave request_id absent.
+    const base: ServerFrame = pty_id
+      ? { t: "pty.error", code, pty_id }
+      : { t: "pty.error", code };
+    if (detail) (base as { detail?: string }).detail = detail;
+    if (request_id !== undefined) {
+      (base as { request_id?: string | null }).request_id = request_id;
+    }
+    sendFrame(base);
   }
 
   function teardown(reason: string): void {
@@ -158,17 +168,30 @@ export function attachBridge(
 
     switch (frame.t) {
       case "pty.open": {
+        // P1-2: capture the client's correlation id (may be undefined for
+        // older clients). Echoed back on the pty.opened OR pty.error response
+        // so the client's pendingOpens map can route the resolution to the
+        // exact promise that sent the open.
+        const requestId = frame.request_id ?? null;
         // Phase 2 binding: the ticket the client names in `pty.open` MUST
         // match the ticket the connection was authed for. A token minted for
         // ticket X cannot drive a PTY for ticket Y.
         if (frame.ticket_id !== ctx.ticketId) {
-          sendError("not-authed", undefined, "ticket mismatch");
+          sendError("not-authed", undefined, "ticket mismatch", requestId);
           return;
         }
         void (async () => {
           const result = await ctx.ptyMap.open({
             ticket_id: frame.ticket_id,
             ownerConnectionId: connection.connectionId,
+            // P1-1 fix (gate-review.md): if the WS closed while we were
+            // awaiting the per-ticket mutex (markDetached already ran but
+            // found no entries to stamp), the new entry would otherwise keep
+            // wsClosedAt: null forever. `connection.closed` flips inside
+            // `teardown()` which fires on ws.close / ws.error / heartbeat
+            // failure / auth reject — every path that calls markDetached.
+            isConnectionAttached: (cid) =>
+              cid === connection.connectionId && !connection.closed,
             spawn: ({ pty_id }) => {
               // Spawn the real PTY. PtySession's handlers route PTY output
               // back over THIS WebSocket as `pty.data` frames carrying the
@@ -199,11 +222,20 @@ export function attachBridge(
             },
           });
           if (!result.ok) {
-            sendError(result.error);
+            // P1-2: echo the request_id so the client routes the error to
+            // the EXACT pending-open it correlates with — not to whichever
+            // pending happens to be first/last in a FIFO queue.
+            sendError(result.error, undefined, undefined, requestId);
             return;
           }
           ctx.onPtySpawned?.();
-          sendFrame({ t: "pty.opened", pty_id: result.pty_id });
+          // P1-2: echo the request_id on success too so the client's Map can
+          // resolve the matching promise.
+          sendFrame({
+            t: "pty.opened",
+            pty_id: result.pty_id,
+            request_id: requestId,
+          });
         })();
         break;
       }

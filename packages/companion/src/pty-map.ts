@@ -66,18 +66,36 @@ export type PtySessionFactory = (args: {
   ownerConnectionId: string;
 }) => PtySession;
 
+/**
+ * P1-1 gate (gate-review.md): when the WS disconnects mid-mutex, the bridge's
+ * `markDetached(connectionId)` runs BEFORE the new entry exists in the map.
+ * The newly-inserted entry would then keep `wsClosedAt: null` forever and the
+ * sweeper would never reap it. `open()` calls this predicate AFTER the insert
+ * to decide whether to stamp `wsClosedAt = now` immediately. Returning `true`
+ * means "the owning connection is still attached, leave wsClosedAt as null."
+ */
+export type IsConnectionAttachedFn = (connectionId: string) => boolean;
+
 /** A pty-map instance. */
 export interface PtyMap {
   /**
    * Atomically mint a pty_id, cap-check, and open a PTY for `ticket_id`.
    * Returns `cap-exceeded` when this ticket already has >= cap entries.
    * The cap-check + insert is mutex-bounded per ticket.
+   *
+   * `isConnectionAttached` (P1-1 race fix): immediately after inserting the
+   * entry, the map asks the bridge whether the owner connection is still
+   * attached. If NOT, the new entry's `wsClosedAt` is stamped to `now()` so
+   * the sweeper reaps it after `idleMs`. Without this check, a tab-reload
+   * during a slow `pty.open` mints an orphan that the sweeper will never see
+   * (because `markDetached` already ran BEFORE the entry was inserted).
    */
   open(args: {
     ticket_id: string;
     ownerConnectionId: string;
     spawn: PtySessionFactory;
     clock?: () => number;
+    isConnectionAttached?: IsConnectionAttachedFn;
   }): Promise<OpenResult>;
 
   /**
@@ -168,8 +186,14 @@ export function createPtyMap(opts: CreatePtyMapOptions = {}): PtyMap {
   }
 
   return {
-    async open({ ticket_id, ownerConnectionId, spawn, clock }): Promise<OpenResult> {
-      const now = (clock ?? Date.now)();
+    async open({
+      ticket_id,
+      ownerConnectionId,
+      spawn,
+      clock,
+      isConnectionAttached,
+    }): Promise<OpenResult> {
+      const clockFn = clock ?? Date.now;
       const lock = ticketLock(ticket_id);
       return lock(async () => {
         if (countForTicket(ticket_id) >= cap) {
@@ -182,10 +206,21 @@ export function createPtyMap(opts: CreatePtyMapOptions = {}): PtyMap {
           ticket_id,
           ownerConnectionId,
           session,
-          lastIoAt: now,
+          // `lastIoAt` is sampled AFTER the spawn — the spawn can take
+          // measurable wall-clock time (node-pty fork + xterm init), so the
+          // pre-spawn `now` would understate the freshness of the new entry.
+          lastIoAt: clockFn(),
           wsClosedAt: null,
         };
         entries.set(pty_id, entry);
+        // P1-1 fix (gate-review.md): if the owning WS disconnected mid-spawn,
+        // markDetached(connectionId) already ran but found NO entries for
+        // this connection — so this new entry kept wsClosedAt: null and the
+        // sweeper would never reap it. Re-check attachment now that the
+        // entry is in the map; stamp wsClosedAt immediately on detached.
+        if (isConnectionAttached && !isConnectionAttached(ownerConnectionId)) {
+          entry.wsClosedAt = clockFn();
+        }
         return { ok: true, pty_id };
       });
     },

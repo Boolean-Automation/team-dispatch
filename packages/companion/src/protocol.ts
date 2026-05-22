@@ -49,6 +49,18 @@ export const MAX_PASTE_BYTES = 64 * 1024; // 64 KiB
 export const PtyOpenFrameSchema = z.object({
   t: z.literal("pty.open"),
   ticket_id: z.string().min(1),
+  /**
+   * P1-2 fix (gate-review.md): correlation id minted client-side, echoed back
+   * by the server on the matching `pty.opened` or `pty.error` frame. Lets the
+   * client's `pendingOpens` map route the response to the exact promise that
+   * sent the open — without it, concurrent opens with a `pty.error` in the
+   * middle either hang forever (`spawn-failed` doesn't dequeue) or reject the
+   * wrong promise (`cap-exceeded` FIFO-shifts the oldest). Optional for
+   * backwards-compat with older clients that don't mint one — server still
+   * accepts those frames but the response carries `request_id: null` and the
+   * client routes the error to a broadcast surface.
+   */
+  request_id: z.string().min(1).optional(),
 });
 
 export const PtyWriteFrameSchema = z.object({
@@ -95,6 +107,11 @@ export const HelloFrameSchema = z.object({
 export const PtyOpenedFrameSchema = z.object({
   t: z.literal("pty.opened"),
   pty_id: z.string().min(1),
+  /**
+   * P1-2 fix: echo of the client's request_id from the corresponding
+   * pty.open. `null` when the inbound frame had no request_id (older clients).
+   */
+  request_id: z.string().min(1).nullable().optional(),
 });
 
 export const PtyDataFrameSchema = z.object({
@@ -127,6 +144,14 @@ export const PtyErrorFrameSchema = z.object({
   code: PtyErrorCodeSchema,
   pty_id: z.string().min(1).optional(),
   detail: z.string().optional(),
+  /**
+   * P1-2 fix: correlates this error to the originating client `pty.open` if
+   * the failure was scoped to one — `null`/omitted means "broadcast error"
+   * (bad-frame, frame-too-large, unknown-pty for a non-open frame, etc.) that
+   * the client should surface as a global toast rather than rejecting a
+   * specific pending promise.
+   */
+  request_id: z.string().min(1).nullable().optional(),
 });
 
 /** Any frame the Companion may send to the browser. */

@@ -1,6 +1,6 @@
 # dispatch terminal — security posture (Phase 2)
 
-Last updated: 2026-05-22 (Slice 7 wrap).
+Last updated: 2026-05-22 (review-fix wrap — P1/P2 fixes from gate-review.md).
 
 This doc ties together the Phase 2 security surface of the dispatch embedded
 local terminal. It is written for the next engineer who lands on this
@@ -60,6 +60,7 @@ added the layer it ships against the threat as the surface grew.
 |---|---|---|
 | WebGL canvas renderer | `packages/web/src/terminal/use-terminal.ts` | xterm renders cell-by-cell via WebGL. Literal HTML in the byte stream is rendered as text glyphs; it cannot escape to the DOM tree. Fallback DOM renderer behaves the same way. |
 | Per-`(ticket_id, pty_id)` IDB partition | `packages/web/src/terminal/scrollback-store.ts` | One IndexedDB store. Composite key `${ticket_id}::${pty_id}::${seq}`. Reads + writes for one ticket cannot touch another ticket's bytes. |
+| Bracketed-paste wrap on Cmd/Ctrl+V | `packages/web/src/terminal/key-handler.ts` | The handler wraps clipboard paste in `\x1b[200~ ... \x1b[201~` BEFORE handing it to the transport. The shell sees the paste as an atomic block — a multi-line paste cannot accidentally execute the first line on its embedded newline. (xterm's `bracketedPasteMode: true` only affects keyboard-driven paste; the transport-write path bypasses it, so the wrap lives here.) Asserted in `key-handler.test.ts` ("Cmd+V multi-line paste wraps the WHOLE block"). **Caveat:** this is a UX/safety control, NOT a security boundary — a malicious shell can still misinterpret the wrapped content. The launcher consent + audit POST stay the load-bearing controls against the "XSS → bytes-in-shell" class. |
 
 ### Slice 3 — Popout same-origin assertion + opener-close detection
 

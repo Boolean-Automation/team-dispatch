@@ -328,6 +328,143 @@ describe("CompanionWsTransport — Phase 2 multi-PTY frames", () => {
     transport.close();
   });
 
+  it("P1-2: pty.error with request_id rejects ONLY the matching pending; others stay pending", async () => {
+    // Three concurrent pty.open calls fly out; the Companion responds with a
+    // pty.error for the MIDDLE one. Only the middle promise should reject;
+    // the other two must remain pending until their own correlated responses
+    // arrive. The pre-fix FIFO would have shifted the OLDEST (wrong) or hung
+    // forever (spawn-failed) — both broken behaviors.
+    const { sock, sent } = makeRecordingSocket();
+    const transport = new CompanionWsTransport({
+      ticketId: "DSP-2901",
+      origin: "http://localhost:5173",
+      mintToken: async () => ({
+        token: "tok",
+        sessionId: "sess-x",
+        port: 7720,
+      }),
+      healthProbe: async () => true,
+      socketFactory: () => sock as unknown as WebSocket,
+    });
+
+    transport.connect({ onFrame: () => {}, onStatus: () => {} });
+    await new Promise<void>((r) => setTimeout(r, 0));
+    await new Promise<void>((r) => setTimeout(r, 0));
+
+    sock._emit("message", {
+      data: JSON.stringify({
+        t: "hello",
+        protocolVersion: 2,
+        companionVersion: "0.1.0",
+        capabilities: [],
+        companion_started_at: 1_000_000,
+      }),
+    });
+
+    // Fire three opens in parallel.
+    const p1 = transport.openPty("DSP-2901");
+    const p2 = transport.openPty("DSP-2901");
+    const p3 = transport.openPty("DSP-2901");
+
+    // Inspect the sent frames to pluck each frame's request_id (the server
+    // would echo this back — we just need to know what to send).
+    const openFrames = sent
+      .filter((s) => s.includes('"pty.open"'))
+      .map((s) => JSON.parse(s) as { request_id: string });
+    expect(openFrames.length).toBe(3);
+    const [, midReq] = openFrames; // the second open's correlation id
+
+    // Server emits a pty.error correlated to the MIDDLE open's request_id.
+    sock._emit("message", {
+      data: JSON.stringify({
+        t: "pty.error",
+        code: "cap-exceeded",
+        detail: "ticket at cap",
+        request_id: midReq.request_id,
+      }),
+    });
+
+    // The middle promise rejects.
+    await expect(p2).rejects.toThrow(/cap exceeded/);
+
+    // p1 and p3 are still pending — they have NOT been touched by the middle
+    // error. We confirm by racing them against a short timer.
+    const stillPending = await Promise.race([
+      Promise.allSettled([p1, p3]).then(() => "settled"),
+      new Promise<string>((r) => setTimeout(() => r("still-pending"), 30)),
+    ]);
+    expect(stillPending).toBe("still-pending");
+
+    // Now resolve p1 and p3 to clean up.
+    sock._emit("message", {
+      data: JSON.stringify({
+        t: "pty.opened",
+        pty_id: "pty-1",
+        request_id: openFrames[0].request_id,
+      }),
+    });
+    sock._emit("message", {
+      data: JSON.stringify({
+        t: "pty.opened",
+        pty_id: "pty-3",
+        request_id: openFrames[2].request_id,
+      }),
+    });
+    await expect(p1).resolves.toBe("pty-1");
+    await expect(p3).resolves.toBe("pty-3");
+
+    transport.close();
+  });
+
+  it("P1-2: spawn-failed correlated to the in-flight open REJECTS that open (no hang)", async () => {
+    // The pre-fix hang: spawn-failed didn't shift the FIFO, so the in-flight
+    // openPty() promise hung forever. With correlation ids, the matching
+    // pending rejects deterministically.
+    const { sock, sent } = makeRecordingSocket();
+    const transport = new CompanionWsTransport({
+      ticketId: "DSP-2901",
+      origin: "http://localhost:5173",
+      mintToken: async () => ({
+        token: "tok",
+        sessionId: "sess-x",
+        port: 7720,
+      }),
+      healthProbe: async () => true,
+      socketFactory: () => sock as unknown as WebSocket,
+    });
+
+    transport.connect({ onFrame: () => {}, onStatus: () => {} });
+    await new Promise<void>((r) => setTimeout(r, 0));
+    await new Promise<void>((r) => setTimeout(r, 0));
+
+    sock._emit("message", {
+      data: JSON.stringify({
+        t: "hello",
+        protocolVersion: 2,
+        companionVersion: "0.1.0",
+        capabilities: [],
+        companion_started_at: 1_000_000,
+      }),
+    });
+
+    const pending = transport.openPty("DSP-2901");
+    const openFrame = JSON.parse(
+      sent.find((s) => s.includes('"pty.open"'))!
+    ) as { request_id: string };
+
+    sock._emit("message", {
+      data: JSON.stringify({
+        t: "pty.error",
+        code: "spawn-failed",
+        detail: "exec /bin/zsh: not found",
+        request_id: openFrame.request_id,
+      }),
+    });
+
+    await expect(pending).rejects.toThrow(/spawn-failed/);
+    transport.close();
+  });
+
   it("routes pty.error spawn-failed to the shell-unavailable state", async () => {
     const { sock } = makeRecordingSocket();
     const transport = new CompanionWsTransport({

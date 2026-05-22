@@ -18,6 +18,7 @@ import {
   installTerminalTransportOnWindow,
   getPopoutBridge,
   resetPopoutBridgeForTest,
+  __pollPopoutClosedForTest,
 } from "./popout-bridge.js";
 import type {
   TerminalSubscribeTransport,
@@ -148,6 +149,71 @@ describe("popout-bridge — singleton transport + cap=1 + window tracking", () =
 
     expect(bridge.popouts.size).toBe(0);
     expect(bridge.isCapReached()).toBe(false);
+    opener.mockRestore();
+  });
+
+  it("P2-5: poll detects OS-kill (popout.closed flips without beforeunload) and decrements the set", () => {
+    // The gate-review.md P2-5 binding: force-quit / browser-crash kills DO
+    // NOT fire `beforeunload` on the popout window. Pre-fix, the set stayed
+    // at 1 forever — cap-enforced blocked new popouts. Post-fix, the 500ms
+    // poll catches the `popout.closed = true` and runs cleanup.
+    const t = new FakeTransport();
+    installTerminalTransportOnWindow(t);
+    const bridge = getPopoutBridge();
+
+    const mockWin = makeMockWindow();
+    const opener = vi
+      .spyOn(window, "open")
+      .mockReturnValue(mockWin as unknown as Window);
+
+    const opened = bridge.openPopout({
+      ticketId: "DSP-2841",
+      ptyId: "pty-a",
+    });
+    expect(opened).toBe(true);
+    expect(bridge.popouts.size).toBe(1);
+
+    // Simulate the OS-kill path: `closed` flips to true WITHOUT firing
+    // beforeunload. Pre-fix, the set would stay at 1 forever.
+    mockWin.closed = true;
+    // The beforeunload listener was never invoked. Verify:
+    expect(bridge.popouts.size).toBe(1);
+
+    // The 500ms poll fires — the test-seam pollOnce runs the same logic.
+    __pollPopoutClosedForTest();
+
+    expect(bridge.popouts.size).toBe(0);
+    expect(bridge.isCapReached()).toBe(false);
+
+    // A new popout can now be opened.
+    const second = bridge.openPopout({
+      ticketId: "DSP-2841",
+      ptyId: "pty-b",
+    });
+    expect(second).toBe(true);
+    expect(bridge.popouts.size).toBe(1);
+
+    opener.mockRestore();
+  });
+
+  it("P2-5: poll is a no-op when popout is still alive", () => {
+    const t = new FakeTransport();
+    installTerminalTransportOnWindow(t);
+    const bridge = getPopoutBridge();
+
+    const mockWin = makeMockWindow();
+    const opener = vi
+      .spyOn(window, "open")
+      .mockReturnValue(mockWin as unknown as Window);
+
+    bridge.openPopout({ ticketId: "DSP-2841", ptyId: "pty-a" });
+    expect(bridge.popouts.size).toBe(1);
+
+    // popout is still alive — poll should be a no-op.
+    expect(mockWin.closed).toBe(false);
+    __pollPopoutClosedForTest();
+    expect(bridge.popouts.size).toBe(1);
+
     opener.mockRestore();
   });
 

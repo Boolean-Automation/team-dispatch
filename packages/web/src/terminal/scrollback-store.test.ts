@@ -219,4 +219,52 @@ describe("scrollbackStore", () => {
       ""
     );
   });
+
+  // ── P2-1 fix (gate-review.md) — concurrent appends transact correctly ─────
+  //
+  // Two concurrent appends from opener + popout on the same (ticket, pty)
+  // pre-fix interleaved: A read-meta, B read-meta, A put-chunk, A write-meta
+  // (X bytes), B put-chunk, B write-meta (X bytes — should be X+B). The
+  // running total lost bytes from the accounting. Post-fix, each append's
+  // RMW is one IDB transaction so the second reads the first's committed
+  // meta.
+
+  it("P2-1: concurrent appends on the same (ticket, pty) accumulate bytes correctly", async () => {
+    const a = "a".repeat(2000);
+    const b = "b".repeat(2000);
+
+    await Promise.all([
+      scrollbackStore.append("DSP-CONC", "pty-1", bytes(a)),
+      scrollbackStore.append("DSP-CONC", "pty-1", bytes(b)),
+    ]);
+
+    // Both chunks must persist.
+    const got = await scrollbackStore.getRecent("DSP-CONC", "pty-1");
+    expect(got.length).toBe(a.length + b.length);
+
+    // The meta.totalBytes must equal the sum of all chunks (no drops).
+    const db = await scrollbackStore.__forTest.getDb();
+    const meta = await db.get("meta", "meta");
+    expect(meta).toBeDefined();
+    expect(meta!.totalBytes).toBe(a.length + b.length);
+  });
+
+  it("P2-1: many concurrent appends on the same (ticket, pty) — totalBytes stays exact", async () => {
+    // Stress: 10 concurrent appends, 500 bytes each.
+    const chunks = Array.from({ length: 10 }, (_, i) =>
+      String.fromCharCode(97 + i).repeat(500)
+    );
+
+    await Promise.all(
+      chunks.map((c) => scrollbackStore.append("DSP-STRESS", "pty-1", bytes(c)))
+    );
+
+    const expectedTotal = chunks.reduce((sum, c) => sum + c.length, 0);
+    const db = await scrollbackStore.__forTest.getDb();
+    const meta = await db.get("meta", "meta");
+    expect(meta!.totalBytes).toBe(expectedTotal);
+
+    const got = await scrollbackStore.getRecent("DSP-STRESS", "pty-1");
+    expect(got.length).toBe(expectedTotal);
+  });
 });

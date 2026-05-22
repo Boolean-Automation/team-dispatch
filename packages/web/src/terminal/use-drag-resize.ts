@@ -4,9 +4,16 @@
 // per visual-spec §8 and plan §S3. The pattern is:
 //   1. pointerdown on the splitter → setPointerCapture, mark .is-dragging.
 //   2. pointermove → compute new size from delta, clamp to [min, max].
-//      Write to the live `panelStyle.transform` AND schedule a rAF-coalesced
-//      `onFit()` call (the FitAddon reflow + pty.resize). 0.55 fits/pointermove
-//      is the prototype-proven bench (probe 4).
+//      P2-3 fix (gate-review.md): the LIVE size is stored in React state via
+//      `liveSize` (separate from the committed `size`), so the returned
+//      `panelStyle` reflects the latest pointer delta DURING the drag. The
+//      panel element re-renders per frame and the user sees AC A15
+//      ("continuous drag-resize splitter") actually behave continuously. The
+//      pre-fix shape only updated `panelStyle` on pointerup, so the visual
+//      feedback was end-of-drag, not during-drag.
+//      Also schedule a rAF-coalesced `onFit()` call (the FitAddon reflow +
+//      pty.resize). 0.55 fits/pointermove is the prototype-proven bench
+//      (probe 4) — fit() throttles at rAF, panelStyle updates per move.
 //   3. pointerup → releasePointerCapture, drop .is-dragging, commit `size`
 //      via `onResize`, and call `onFit()` one last time as the settle.
 //
@@ -16,8 +23,10 @@
 //
 // Public-interface-only test surface:
 //   - `splitterProps` — spread onto the splitter element to bind events.
-//   - `panelStyle`    — spread onto the panel host for the transform during drag.
+//   - `panelStyle`    — spread onto the panel host. Reflects the LIVE drag size
+//                       during a drag, then commits on pointerup.
 //   - `size`          — the committed size (only changes on pointerup).
+//   - `liveSize`      — the live drag size (changes during pointermove).
 //   - `dragging`      — whether a drag is in flight (UI .is-dragging class).
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -43,10 +52,20 @@ export interface UseDragResizeResult {
     onPointerDown: (ev: React.PointerEvent<HTMLDivElement>) => void;
     className: string;
   };
-  /** Style to spread onto the panel host — keeps the panel size in sync. */
+  /**
+   * Style to spread onto the panel host. P2-3 fix: this reflects the LIVE
+   * drag size during pointermove, not just the committed size — so the panel
+   * follows the pointer continuously (AC A15 binding).
+   */
   panelStyle: React.CSSProperties;
   /** The current (committed) size. Only updates on pointerup. */
   size: number;
+  /**
+   * P2-3 fix: the live drag size — updates per pointermove during a drag.
+   * Equal to `size` when no drag is in flight. Exposed so tests can assert
+   * continuous reflow without poking at refs.
+   */
+  liveSize: number;
   /** Whether a drag is currently active. */
   dragging: boolean;
 }
@@ -63,12 +82,18 @@ export function useDragResize(
   const { axis, initial, min, max, onFit, onResize } = opts;
   const [size, setSize] = useState(initial);
   const [dragging, setDragging] = useState(false);
+  // P2-3 fix (gate-review.md): live drag size lives in React state, not just
+  // a ref, so the returned `panelStyle` re-renders the panel host per frame
+  // during the drag. AC A15 binding: the user must see the panel reflow
+  // continuously as the pointer moves, not jump at pointerup.
+  const [liveSize, setLiveSize] = useState(initial);
 
-  // Live drag state held in refs — pointer event handlers see fresh values
-  // without re-binding listeners.
+  // Live drag refs — pointer event handlers see fresh values without
+  // re-binding listeners. `liveSizeRef` mirrors the React state so the
+  // pointerup commit can read the latest value synchronously.
   const startCoord = useRef(0);
   const startSize = useRef(initial);
-  const liveSize = useRef(initial);
+  const liveSizeRef = useRef(initial);
   const rafScheduled = useRef(false);
   const pointerCaptureEl = useRef<HTMLElement | null>(null);
   const pointerIdRef = useRef<number | null>(null);
@@ -91,9 +116,17 @@ export function useDragResize(
       const coord = axis === "ns" ? ev.clientY : ev.clientX;
       const delta = startCoord.current - coord;
       const next = Math.max(min, Math.min(max, startSize.current + delta));
-      liveSize.current = next;
+      liveSizeRef.current = next;
+      // P2-3 fix (gate-review.md): push the live size into React state so
+      // the returned `panelStyle` re-renders the panel host per move. AC A15
+      // requires the panel to reflow continuously — pre-fix, panelStyle only
+      // tracked the committed `size` (pointerup), so the panel jumped at
+      // end-of-drag rather than following the pointer.
+      setLiveSize(next);
 
-      // rAF-coalesce the onFit call.
+      // rAF-coalesce the onFit call. Fit (xterm reflow + pty.resize) stays
+      // throttled at 0.55 fits/pointermove (probe 4 bench); the panel
+      // dimension itself updates per pointermove via setLiveSize above.
       if (!rafScheduled.current) {
         rafScheduled.current = true;
         requestAnimationFrame(() => {
@@ -122,8 +155,13 @@ export function useDragResize(
       window.removeEventListener("pointerup", handlePointerUp);
       window.removeEventListener("pointercancel", handlePointerUp);
 
-      const committed = liveSize.current;
+      const committed = liveSizeRef.current;
       setSize(committed);
+      // P2-3: also commit the live state so panelStyle stays consistent
+      // post-drag (no flicker between liveSize and size at the end-of-drag
+      // boundary). The setLiveSize call is a no-op when liveSize already
+      // equals committed.
+      setLiveSize(committed);
       setDragging(false);
       pointerCaptureEl.current = null;
       pointerIdRef.current = null;
@@ -148,7 +186,8 @@ export function useDragResize(
       const target = ev.currentTarget;
       startCoord.current = axis === "ns" ? ev.clientY : ev.clientX;
       startSize.current = size;
-      liveSize.current = size;
+      liveSizeRef.current = size;
+      setLiveSize(size);
       pointerCaptureEl.current = target;
       pointerIdRef.current = ev.pointerId;
       try {
@@ -173,8 +212,15 @@ export function useDragResize(
     };
   }, [handlePointerMove, handlePointerUp]);
 
+  // P2-3 fix (gate-review.md): panelStyle reflects the LIVE drag size during
+  // a drag (via the React `liveSize` state), so the panel reflows
+  // continuously as the pointer moves. When not dragging, `liveSize === size`
+  // so panelStyle is the committed size.
+  const renderedSize = dragging ? liveSize : size;
   const panelStyle: React.CSSProperties =
-    axis === "ns" ? { height: `${size}px` } : { width: `${size}px` };
+    axis === "ns"
+      ? { height: `${renderedSize}px` }
+      : { width: `${renderedSize}px` };
 
   return {
     splitterProps: {
@@ -185,6 +231,7 @@ export function useDragResize(
     },
     panelStyle,
     size,
+    liveSize,
     dragging,
   };
 }

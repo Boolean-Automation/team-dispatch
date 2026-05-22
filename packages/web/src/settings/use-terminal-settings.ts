@@ -83,9 +83,23 @@ export interface ClerkLikeUser {
   }): Promise<void>;
 }
 
-/** Optional broadcaster the hook uses for cross-window sync (mockable). */
+/**
+ * P1-3 fix (gate-review.md): the broadcaster surface now covers BOTH posting
+ * AND receiving on the same channel. The previous shape created two separate
+ * BroadcastChannels per hook instance (one for post, one for receive), and
+ * because BroadcastChannel does NOT deliver to its own poster by spec, a
+ * single channel both posts AND receives correctly with no self-echo and no
+ * spurious re-renders. Tests can still inject a mock that bridges
+ * postMessage → onMessage (e.g. for same-tab cross-instance verification).
+ */
 export interface SettingsBroadcaster {
   postMessage(payload: unknown): void;
+  /**
+   * Subscribe to incoming messages on this channel. Returns an unsubscribe
+   * function. The default BroadcastChannel implementation will NOT deliver
+   * messages back to the SAME broadcaster instance that posted them.
+   */
+  onMessage?(handler: (payload: unknown) => void): () => void;
   close(): void;
 }
 
@@ -325,8 +339,17 @@ export function useTerminalSettings(
   );
   const clock = clockRef.current;
 
-  // BroadcastChannel — opener + popout sync. Created when user is known.
+  // P1-3 + P1-4 fix (gate-review.md): ONE BroadcastChannel per hook instance,
+  // used for BOTH posting and receiving. BroadcastChannel does NOT deliver
+  // messages to the same broadcaster instance that posted them (per spec), so
+  // a single object correctly post-and-receives with no self-echo and no
+  // need for tab-id discrimination. The effect now depends on `userId`
+  // (primitive) rather than `user` (object) — `useSafeClerkLikeUser` returns
+  // a fresh `{ user }` object every render, so `[user]` would tear down + re-
+  // create the BC on every PTY data frame (~60/s during typing). Keying on
+  // `user?.id` is stable across renders.
   const broadcasterRef = useRef<SettingsBroadcaster | null>(null);
+  const userId = user?.id;
   useEffect(() => {
     if (!user) return;
     const name = broadcastChannelName(user.id);
@@ -342,7 +365,10 @@ export function useTerminalSettings(
       }
       broadcasterRef.current = null;
     };
-  }, [user, createBroadcaster]);
+    // Reads `user` for the body but keys on the STABLE `userId` primitive —
+    // collapses object-identity churn from upstream `useSafeClerkLikeUser`
+    // re-wrapping. `createBroadcaster` is mount-stable in production.
+  }, [userId, createBroadcaster]);
 
   // Clear any pending timers on unmount.
   useEffect(() => {
@@ -499,11 +525,14 @@ export function useTerminalSettings(
     return save(lastPartialRef.current);
   }, [save]);
 
-  // Subscribe to BroadcastChannel — when another tab applies settings, update
-  // local state so the UI follows without a page reload.
+  // P1-3 fix (gate-review.md): subscribe to the SAME broadcaster created in
+  // the effect above — no second BroadcastChannel. The spec-mandated behavior
+  // is that a single channel does NOT deliver to its own poster, so this
+  // hook never receives its own saves (no self-echo, no spurious re-renders
+  // on each local save). The dep array also keys on `userId` (primitive),
+  // not `user` (object) — see the P1-4 reasoning above.
   useEffect(() => {
-    if (!user) return;
-    const name = broadcastChannelName(user.id);
+    if (!userId) return;
     const handler = (payload: unknown) => {
       if (
         payload &&
@@ -521,32 +550,19 @@ export function useTerminalSettings(
         }
       }
     };
-    // Real BroadcastChannel listens via 'message' events; the default
-    // broadcaster wraps that. For tests, opts.createBroadcaster returns a
-    // mock that bridges its own emit; subscription is done by exposing the
-    // broadcaster's underlying onMessage when available.
-    let cleanup: (() => void) | null = null;
-    if (typeof BroadcastChannel !== "undefined" && !createBroadcaster) {
-      try {
-        const bc = new BroadcastChannel(name);
-        const wrapped = (ev: MessageEvent) => handler(ev.data);
-        bc.addEventListener("message", wrapped);
-        cleanup = () => {
-          bc.removeEventListener("message", wrapped);
-          try {
-            bc.close();
-          } catch {
-            /* already closed */
-          }
-        };
-      } catch {
-        /* environment without BroadcastChannel — skip */
-      }
-    }
-    return () => {
-      cleanup?.();
+    // The broadcaster might not be installed yet on first render; defer the
+    // subscription until the next microtask, then re-check.
+    let unsubscribe: (() => void) | null = null;
+    const tryAttach = (): void => {
+      const bc = broadcasterRef.current;
+      if (!bc || !bc.onMessage) return;
+      unsubscribe = bc.onMessage(handler);
     };
-  }, [user, createBroadcaster]);
+    tryAttach();
+    return () => {
+      unsubscribe?.();
+    };
+  }, [userId]);
 
   return { settings, save, saveState, retry };
 }
@@ -561,11 +577,20 @@ function defaultBroadcaster(name: string): SettingsBroadcaster {
       postMessage() {
         /* no-op */
       },
+      onMessage() {
+        return () => {};
+      },
       close() {
         /* no-op */
       },
     };
   }
+  // P1-3 fix: ONE BroadcastChannel object that BOTH posts AND receives. The
+  // spec is explicit that a channel does NOT deliver messages to its own
+  // poster, so binding `addEventListener('message', ...)` on the same `bc`
+  // we call `postMessage` on never fires the self-echo path. The previous
+  // shape used two separate `new BroadcastChannel(name)` objects in two
+  // useEffects — the cross-instance same-tab self-echo is what P1-3 fixed.
   const bc = new BroadcastChannel(name);
   return {
     postMessage(payload: unknown) {
@@ -574,6 +599,17 @@ function defaultBroadcaster(name: string): SettingsBroadcaster {
       } catch {
         /* channel closed */
       }
+    },
+    onMessage(handler) {
+      const wrapped = (ev: MessageEvent) => {
+        try {
+          handler(ev.data);
+        } catch {
+          /* handler error must not break the channel */
+        }
+      };
+      bc.addEventListener("message", wrapped);
+      return () => bc.removeEventListener("message", wrapped);
     },
     close() {
       try {

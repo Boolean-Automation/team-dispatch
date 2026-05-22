@@ -9,16 +9,30 @@
 //   - Cmd/Ctrl + C, selection present → `clipboard.writeText(selection)`,
 //     swallow the event (do NOT let xterm see it).
 //   - Cmd/Ctrl + C, no selection → write `\x03` through the transport.
-//   - Cmd/Ctrl + V → `clipboard.readText()`, write the result through the
-//     transport. xterm's bracketed-paste mode (set on the `Terminal` itself)
-//     wraps the bytes so shells that understand it (zsh, bash readline) see
-//     the paste atomically rather than as keystrokes.
+//   - Cmd/Ctrl + V → `clipboard.readText()`, wrap the result in bracketed-
+//     paste markers (`\x1b[200~ ... \x1b[201~`), then write through the
+//     transport. P2-2 fix (gate-review.md): xterm's `bracketedPasteMode: true`
+//     setting only affects keyboard-driven paste; programmatic paste through
+//     `transport.send({ kind: 'pty.write', data })` does NOT auto-wrap. The
+//     wrapping here is what shells (zsh, bash readline) need to see the
+//     paste as an atomic block rather than as a stream of keystrokes (no
+//     accidental newline execution during a multi-line paste).
 //   - Cmd+Shift+C, plain typing, etc. → returned `true` (xterm handles it).
 //
 // The handler returns a `dispose` fn that swaps in a noop so the chord stops
 // firing once the React component unmounts.
 
 import type { Terminal } from "@xterm/xterm";
+
+/**
+ * Bracketed-paste-mode (BPM) markers. The shell needs to see the paste as an
+ * atomic block — without these markers, a multi-line paste would execute the
+ * first line on the embedded `\n` rather than wait for the user to hit Enter.
+ *
+ * Spec: https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h2-Bracketed-Paste-Mode
+ */
+export const BPM_START = "\x1b[200~";
+export const BPM_END = "\x1b[201~";
 
 /**
  * The minimal transport contract the key handler depends on. Decoupled from
@@ -88,8 +102,13 @@ export function installKeyHandler(
           .readText()
           .then((text) => {
             if (disposed) return;
-            // Empty paste = no-op; non-empty rides bracketed-paste through xterm.
-            if (text.length > 0) transport.write(ptyId, text);
+            // Empty paste = no-op.
+            if (text.length === 0) return;
+            // P2-2 fix (gate-review.md): wrap the paste in bracketed-paste
+            // markers BEFORE handing it to the transport. The transport
+            // path bypasses xterm's bracketed-paste logic, so we wrap here
+            // to give the shell the atomic-paste signal it needs.
+            transport.write(ptyId, BPM_START + text + BPM_END);
           })
           .catch(() => {
             /* clipboard read denied — silently degrade. The SE's existing

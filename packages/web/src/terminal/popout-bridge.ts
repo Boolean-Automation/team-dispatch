@@ -49,8 +49,66 @@ const TRANSPORT_GLOBAL_KEY = "terminalTransport";
 /** The single popout cap — Codex F4 binding. */
 const POPOUT_CAP = 1;
 
+/**
+ * P2-5 fix (gate-review.md): the popout `Set<Window>` is decremented on
+ * `beforeunload`, but some OS-level kills (force-quit, browser crash) skip
+ * `beforeunload` and leave the set at size 1 — permanently blocking new
+ * popouts until the opener tab also closes. Poll `popout.closed` every
+ * 500ms in the opener as a backstop.
+ */
+const POPOUT_CLOSED_POLL_MS = 500;
+
 let _popouts: Set<Window> = new Set();
 let _channels = new Map<string, BroadcastChannel>();
+/**
+ * P2-5: registered per-popout cleanup callbacks. Keyed by Window so the poll
+ * loop can dispatch the cleanup once `popout.closed` flips to true.
+ */
+let _popoutCleanups = new Map<Window, () => void>();
+let _pollTimer: ReturnType<typeof setInterval> | null = null;
+
+/** P2-5: start the polling loop on first popout open; idempotent. */
+function ensurePollRunning(): void {
+  if (_pollTimer !== null) return;
+  _pollTimer = setInterval(() => {
+    if (_popouts.size === 0) {
+      // No popouts left — stop polling to avoid the background tick.
+      if (_pollTimer !== null) {
+        clearInterval(_pollTimer);
+        _pollTimer = null;
+      }
+      return;
+    }
+    // Snapshot the set to detect closures without mutating during iteration.
+    const snapshot = Array.from(_popouts);
+    for (const win of snapshot) {
+      let isClosed = false;
+      try {
+        isClosed = win.closed === true;
+      } catch {
+        // Cross-origin or detached popouts may throw on `.closed` — treat
+        // any throw as "closed" since we can't track it anymore anyway.
+        isClosed = true;
+      }
+      if (isClosed) {
+        const cleanup = _popoutCleanups.get(win);
+        _popoutCleanups.delete(win);
+        _popouts.delete(win);
+        try {
+          cleanup?.();
+        } catch {
+          /* cleanup error must not break the polling loop */
+        }
+      }
+    }
+  }, POPOUT_CLOSED_POLL_MS);
+  // unref the timer where supported so the loop doesn't keep a test process
+  // alive after the panel closes. Browser windows don't expose `unref` —
+  // `setInterval`'s return type in DOM is a `number`, so we can't call it
+  // unconditionally; gracefully no-op when unavailable.
+  const t = _pollTimer as unknown as { unref?: () => void };
+  t.unref?.();
+}
 
 /**
  * Install the transport singleton on `window`. Called once on first
@@ -129,20 +187,36 @@ const bridge: PopoutBridge = {
     const win = window.open(target, "_blank", "popup,width=900,height=600");
     if (!win) return false;
     _popouts.add(win);
-    const onUnload = () => {
+
+    // P2-5 fix (gate-review.md): unified cleanup function that runs on
+    // EITHER `beforeunload` OR the 500ms `popout.closed` poll. OS-level
+    // kills (force-quit, browser crash) skip beforeunload, so the poll is
+    // the backstop that keeps the popout set + cap-enforcement honest.
+    const cleanup = (): void => {
       _popouts.delete(win);
+      _popoutCleanups.delete(win);
       try {
         win.removeEventListener("beforeunload", onUnload);
       } catch {
         /* already closed */
       }
     };
+    _popoutCleanups.set(win, cleanup);
+
+    const onUnload = (): void => {
+      cleanup();
+    };
+
     try {
       win.addEventListener("beforeunload", onUnload);
     } catch {
       // Cross-origin or already-closed popouts cannot install listeners; rely
-      // on the periodic poll in the popout-route to detect death from inside.
+      // on the 500ms poll below to detect death.
     }
+
+    // P2-5: start the poll loop (idempotent — does nothing if already running).
+    ensurePollRunning();
+
     return true;
   },
 
@@ -183,4 +257,37 @@ export function resetPopoutBridgeForTest(): void {
   }
   _popouts = new Set();
   _channels = new Map();
+  _popoutCleanups = new Map();
+  if (_pollTimer !== null) {
+    clearInterval(_pollTimer);
+    _pollTimer = null;
+  }
+}
+
+/**
+ * P2-5 test-only: synchronously run one poll iteration. Vitest's fake-timers
+ * could also drive the live setInterval, but exposing this seam keeps the
+ * test (a) deterministic and (b) free from setting up fake timers globally.
+ */
+export function __pollPopoutClosedForTest(): void {
+  if (_popouts.size === 0) return;
+  const snapshot = Array.from(_popouts);
+  for (const win of snapshot) {
+    let isClosed = false;
+    try {
+      isClosed = win.closed === true;
+    } catch {
+      isClosed = true;
+    }
+    if (isClosed) {
+      const cleanup = _popoutCleanups.get(win);
+      _popoutCleanups.delete(win);
+      _popouts.delete(win);
+      try {
+        cleanup?.();
+      } catch {
+        /* */
+      }
+    }
+  }
 }

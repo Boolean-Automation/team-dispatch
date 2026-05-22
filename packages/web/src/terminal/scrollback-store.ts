@@ -187,6 +187,23 @@ async function evictUntilUnderBudget(
 /**
  * Append a chunk of bytes for (ticket_id, pty_id). Bumps the running total
  * and triggers eviction if the byte budget is exceeded.
+ *
+ * P2-1 fix (gate-review.md): the read-meta → put-chunk → write-meta sequence
+ * is wrapped in a SINGLE IDB transaction so concurrent appends from opener +
+ * popout (both writing the same `(ticket, pty)`) can no longer interleave:
+ *   pre-fix:  A read-meta, B read-meta, A put-chunk, A write-meta (X bytes),
+ *             B put-chunk, B write-meta (X bytes — should be X+B) → bytes
+ *             dropped from the running total, eviction misfires.
+ *   post-fix: each append owns the chunks+meta stores for the full RMW. The
+ *             second concurrent append's `readMeta` reads the value the
+ *             first append's `writeMeta` already committed, so totalBytes
+ *             accumulates correctly.
+ *
+ * Eviction (a multi-cursor walk) stays OUTSIDE the append transaction —
+ * doing eviction inside the same tx would tie up the chunks store for
+ * potentially many MB of cursor work, blocking other transactions. The
+ * trade is that eviction can momentarily over-shoot the budget; that's
+ * acceptable because the budget itself is a soft target.
  */
 async function append(
   ticket_id: string,
@@ -195,14 +212,28 @@ async function append(
 ): Promise<void> {
   if (bytes.length === 0) return;
   const db = await getDb();
-  const meta = await readMeta(db);
+
+  // Copy the bytes — Uint8Array views over a shared buffer leak surprises.
+  const bytesCopy = new Uint8Array(bytes);
+
+  // P2-1: single transaction across chunks + meta. The tx serializes the
+  // RMW so a concurrent append on the same (ticket, pty) sees our committed
+  // meta before issuing its own read.
+  const tx = db.transaction(["chunks", "meta"], "readwrite");
+  const chunksStore = tx.objectStore("chunks");
+  const metaStore = tx.objectStore("meta");
+
+  const metaRaw = await metaStore.get("meta");
+  const meta: MetaRow = metaRaw ?? {
+    id: "meta",
+    totalBytes: 0,
+    byteBudget: DEFAULT_BYTE_BUDGET,
+    seqByKey: {},
+  };
 
   const sKey = seqKey(ticket_id, pty_id);
   const nextSeq = (meta.seqByKey[sKey] ?? 0) + 1;
   meta.seqByKey[sKey] = nextSeq;
-
-  // Copy the bytes — Uint8Array views over a shared buffer leak surprises.
-  const bytesCopy = new Uint8Array(bytes);
 
   const row: ChunkRow = {
     key: makeKey(ticket_id, pty_id, nextSeq),
@@ -214,11 +245,19 @@ async function append(
     closed_at: null,
     size_bytes: bytesCopy.length,
   };
-  await db.put("chunks", row);
+  await chunksStore.put(row);
 
   meta.totalBytes += bytesCopy.length;
-  await evictUntilUnderBudget(db, meta);
-  await writeMeta(db, meta);
+  await metaStore.put(meta);
+  await tx.done;
+
+  // Eviction is intentionally OUTSIDE the append transaction (see jsdoc
+  // above). The post-eviction meta is committed in a separate write.
+  if (meta.totalBytes > meta.byteBudget) {
+    const evictMeta = (await readMeta(db));
+    await evictUntilUnderBudget(db, evictMeta);
+    await writeMeta(db, evictMeta);
+  }
 }
 
 /**

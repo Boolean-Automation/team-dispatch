@@ -129,7 +129,10 @@ describe("installKeyHandler", () => {
     expect(clipboard.writeText).toHaveBeenCalledWith("selected");
   });
 
-  it("Cmd+V reads clipboard and writes the bytes through the transport", async () => {
+  it("Cmd+V reads clipboard and writes the bytes wrapped in bracketed-paste markers", async () => {
+    // P2-2 fix (gate-review.md): the previous test expected the raw paste
+    // string. The new behavior wraps it in `\x1b[200~ ... \x1b[201~` so the
+    // shell sees the paste as an atomic block (no accidental newline-exec).
     clipboard.readText.mockResolvedValue("pasted-content");
 
     installKeyHandler(
@@ -149,7 +152,56 @@ describe("installKeyHandler", () => {
     await Promise.resolve();
 
     expect(clipboard.readText).toHaveBeenCalled();
-    expect(writeSpy).toHaveBeenCalledWith("pty-1", "pasted-content");
+    expect(writeSpy).toHaveBeenCalledWith(
+      "pty-1",
+      "\x1b[200~pasted-content\x1b[201~"
+    );
+  });
+
+  it("Cmd+V multi-line paste wraps the WHOLE block (no per-line writes)", async () => {
+    // The reason bracketed-paste matters: a paste like "ls -l\ndate" would
+    // EXECUTE `ls -l` on the embedded newline without BPM. The fix sends
+    // the entire paste in ONE wrapped block.
+    clipboard.readText.mockResolvedValue("ls -l\ndate");
+
+    installKeyHandler(
+      term as unknown as Parameters<typeof installKeyHandler>[0],
+      { write: writeSpy },
+      "pty-1",
+      { clipboard: clipboard as unknown as Clipboard }
+    );
+
+    term._handler?.(kbd("v", { meta: true }));
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // ONE transport.write call, wrapping the WHOLE paste — not multiple
+    // calls split on newline.
+    expect(writeSpy).toHaveBeenCalledTimes(1);
+    expect(writeSpy).toHaveBeenCalledWith(
+      "pty-1",
+      "\x1b[200~ls -l\ndate\x1b[201~"
+    );
+  });
+
+  it("Cmd+V empty clipboard is a no-op (does NOT send empty BPM markers)", async () => {
+    clipboard.readText.mockResolvedValue("");
+
+    installKeyHandler(
+      term as unknown as Parameters<typeof installKeyHandler>[0],
+      { write: writeSpy },
+      "pty-1",
+      { clipboard: clipboard as unknown as Clipboard }
+    );
+
+    term._handler?.(kbd("v", { meta: true }));
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Empty paste skips the wrap entirely.
+    expect(writeSpy).not.toHaveBeenCalled();
   });
 
   it("ignores non-C/V Cmd/Ctrl chords (lets xterm handle them)", () => {

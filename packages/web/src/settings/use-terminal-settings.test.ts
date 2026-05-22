@@ -431,3 +431,213 @@ describe("useTerminalSettings — saveState machine + retry + budget", () => {
     expect(msg.settings.theme).toBe("paper");
   });
 });
+
+// ── P1-3 + P1-4 fix verification (gate-review.md) ───────────────────────────
+//
+// P1-3: a single BroadcastChannel posts AND receives — but the receiver
+// path does NOT see its own poster's messages (BC spec). Cross-instance
+// (two hooks on the same userId in the same test) DO see each other's
+// messages — the cross-window propagation path.
+//
+// P1-4: the BC effect keys on `userId` (primitive), not `user` (object) —
+// so a fresh `{ user }` object identity each render does NOT tear down +
+// recreate the channel. The test below mounts the same hook twice with a
+// fresh user object each render and asserts that the underlying broadcaster
+// is created EXACTLY ONCE per hook instance — not per render.
+
+describe("useTerminalSettings — P1-3 + P1-4 BroadcastChannel discipline", () => {
+  /**
+   * A shared-in-test broadcaster pool: both hook instances that pass the
+   * same `name` share the underlying message bus, so we can simulate the
+   * cross-tab path inside a single test process. Each named channel is one
+   * shared bus across all instances opened against that name.
+   */
+  function makeSharedBcPool(): {
+    factory: (name: string) => SettingsBroadcaster;
+    instancesByName: Map<string, number>;
+    closesByName: Map<string, number>;
+  } {
+    const listeners = new Map<
+      string,
+      Set<{ instance: number; fn: (p: unknown) => void }>
+    >();
+    const instancesByName = new Map<string, number>();
+    const closesByName = new Map<string, number>();
+
+    function factory(name: string): SettingsBroadcaster {
+      const myInstance = (instancesByName.get(name) ?? 0) + 1;
+      instancesByName.set(name, myInstance);
+      let myListeners: Array<{ instance: number; fn: (p: unknown) => void }> = [];
+
+      return {
+        postMessage(payload: unknown) {
+          const set = listeners.get(name);
+          if (!set) return;
+          for (const entry of set) {
+            // BroadcastChannel SPEC: do NOT deliver to your own poster.
+            if (entry.instance === myInstance) continue;
+            try {
+              entry.fn(payload);
+            } catch {
+              /* swallow */
+            }
+          }
+        },
+        onMessage(handler) {
+          const entry = { instance: myInstance, fn: handler };
+          let set = listeners.get(name);
+          if (!set) {
+            set = new Set();
+            listeners.set(name, set);
+          }
+          set.add(entry);
+          myListeners.push(entry);
+          return () => {
+            set!.delete(entry);
+          };
+        },
+        close() {
+          for (const entry of myListeners) {
+            listeners.get(name)?.delete(entry);
+          }
+          myListeners = [];
+          closesByName.set(name, (closesByName.get(name) ?? 0) + 1);
+        },
+      };
+    }
+
+    return { factory, instancesByName, closesByName };
+  }
+
+  it("cross-instance: instance-B receives instance-A's save (cross-window proven)", async () => {
+    const pool = makeSharedBcPool();
+    const userA = makeFakeUser({});
+    const userB = makeFakeUser({});
+
+    const hookA = renderHook(() =>
+      useTerminalSettings({
+        user: userA,
+        debounceMs: 0,
+        createBroadcaster: pool.factory,
+      })
+    );
+    const hookB = renderHook(() =>
+      useTerminalSettings({
+        user: userB,
+        debounceMs: 0,
+        createBroadcaster: pool.factory,
+      })
+    );
+
+    // Both hooks talk to the same `dispatch-settings-user_test_1` bus.
+    expect(pool.instancesByName.get("dispatch-settings-user_test_1")).toBe(2);
+
+    // Pre-condition: both start with default theme.
+    expect(hookA.result.current.settings.theme).toBe("coal");
+    expect(hookB.result.current.settings.theme).toBe("coal");
+
+    // A saves. B should receive the broadcast.
+    await act(async () => {
+      await hookA.result.current.save({ theme: "paper" });
+    });
+
+    await waitFor(() => {
+      expect(hookB.result.current.settings.theme).toBe("paper");
+    });
+
+    hookA.unmount();
+    hookB.unmount();
+  });
+
+  it("self-echo suppressed: same instance does NOT re-receive its own save", async () => {
+    // Concretely: A saves → A's settings update (optimistic local), but the
+    // BC-driven setSettings should NOT fire again for A (no spurious second
+    // render with the same value). We measure this by counting how many
+    // times the broadcaster's `onMessage` handler observes the save on the
+    // instance that originated it — answer must be 0.
+    const pool = makeSharedBcPool();
+    const user = makeFakeUser({});
+
+    let aHandlerInvocations = 0;
+    // Wrap the pool factory to spy on the FIRST handler attached for the
+    // user_test_1 channel — that's hookA's listener.
+    const wrappedFactory = (name: string): SettingsBroadcaster => {
+      const inner = pool.factory(name);
+      const isFirst = pool.instancesByName.get(name) === 1;
+      return {
+        postMessage: inner.postMessage,
+        onMessage(h) {
+          if (!inner.onMessage) return () => {};
+          return inner.onMessage((p) => {
+            if (isFirst) aHandlerInvocations++;
+            h(p);
+          });
+        },
+        close: inner.close,
+      };
+    };
+
+    const hookA = renderHook(() =>
+      useTerminalSettings({
+        user,
+        debounceMs: 0,
+        createBroadcaster: wrappedFactory,
+      })
+    );
+
+    await act(async () => {
+      await hookA.result.current.save({ theme: "paper" });
+    });
+
+    // A's listener must NOT have fired — BC spec says you don't echo to
+    // your own poster.
+    expect(aHandlerInvocations).toBe(0);
+    // The local state still updated via the optimistic path (the save
+    // succeeded and the read-back matched).
+    expect(hookA.result.current.settings.theme).toBe("paper");
+
+    hookA.unmount();
+  });
+
+  it("P1-4: BC factory is invoked ONCE per hook instance across many re-renders", async () => {
+    // The fix: the BC effect's deps key on `userId` (primitive), not
+    // `user` (object). Even if the parent component re-creates `user` as a
+    // fresh `{ ...user }` each render (the production
+    // `useSafeClerkLikeUser` shape), the BC must NOT tear down and rebuild.
+    const pool = makeSharedBcPool();
+    let renderCount = 0;
+    const baseUser = makeFakeUser({});
+
+    function Harness({ tick }: { tick: number }) {
+      // Fresh object identity each render — emulates the production hook
+      // returning `{ user }` from a `useMemo`-less code path.
+      void tick;
+      renderCount++;
+      const wrappedUser: ClerkLikeUser = { ...baseUser, id: baseUser.id };
+      const r = useTerminalSettings({
+        user: wrappedUser,
+        debounceMs: 0,
+        createBroadcaster: pool.factory,
+      });
+      return r;
+    }
+
+    const hook = renderHook(({ tick }: { tick: number }) => Harness({ tick }), {
+      initialProps: { tick: 0 },
+    });
+
+    // Trigger several re-renders.
+    for (let i = 1; i <= 5; i++) {
+      hook.rerender({ tick: i });
+    }
+    expect(renderCount).toBeGreaterThan(5);
+    // The factory must have been called EXACTLY ONCE despite 6+ renders.
+    expect(pool.instancesByName.get("dispatch-settings-user_test_1")).toBe(1);
+    // And the channel was NOT closed across rerenders.
+    expect(pool.closesByName.get("dispatch-settings-user_test_1") ?? 0).toBe(0);
+
+    hook.unmount();
+    // After unmount, the channel IS closed.
+    expect(pool.closesByName.get("dispatch-settings-user_test_1")).toBe(1);
+  });
+});

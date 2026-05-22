@@ -11,7 +11,7 @@
 // that writes through to Clerk on toggle. localStorage stays as the offline
 // fallback for `open` / `position` when no user is present.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 export type PanelPosition = "bottom" | "right";
 
@@ -95,32 +95,50 @@ export function usePanelState(opts?: {
     persistToStorage(state);
   }, [state]);
 
+  // P2-4 fix (gate-review.md): the Clerk persistPosition side effect must
+  // run OUTSIDE the setState reducer. React 18 StrictMode (dev) and React's
+  // upcoming concurrent rendering call reducer functions TWICE for purity
+  // checking; running the Clerk write inside the reducer would fire it
+  // twice in StrictMode — exactly the double-write the gate review flagged.
+  // The fix: setState updates pure state; a useEffect that watches
+  // `state.position` fires the Clerk write exactly once per actual change.
+  //
+  // Tracking `isInitialMount` prevents the initial-state useEffect tick from
+  // posting a "persist initial position" on every mount (which would be
+  // noisy + would re-fire the StrictMode double-mount in dev).
+  const persistPositionRef = useRef(opts?.persistPosition);
+  persistPositionRef.current = opts?.persistPosition;
+  const prevPersistedPositionRef = useRef<PanelPosition | null>(null);
+  useEffect(() => {
+    // Skip the initial-mount tick — we only want to persist USER-DRIVEN
+    // changes, not the initial state load. `prevPersistedPositionRef` starts
+    // null and is stamped on first run.
+    if (prevPersistedPositionRef.current === null) {
+      prevPersistedPositionRef.current = state.position;
+      return;
+    }
+    if (prevPersistedPositionRef.current === state.position) return;
+    prevPersistedPositionRef.current = state.position;
+    try {
+      persistPositionRef.current?.(state.position);
+    } catch {
+      /* persistence errors surface via SaveStateChip — don't block toggle */
+    }
+  }, [state.position]);
+
   const togglePosition = useCallback(() => {
+    // Pure reducer — only flips state. The persist effect above fires the
+    // Clerk write once after the state lands (StrictMode-safe).
     setState((s) => {
       const next: PanelPosition = s.position === "bottom" ? "right" : "bottom";
-      // Write-through to Clerk if Settings is wired up.
-      try {
-        opts?.persistPosition?.(next);
-      } catch {
-        /* persistence errors surface via SaveStateChip — don't block toggle */
-      }
       return { ...s, position: next };
     });
-  }, [opts?.persistPosition]);
+  }, []);
 
-  const setPosition = useCallback(
-    (p: PanelPosition) => {
-      setState((s) => {
-        try {
-          opts?.persistPosition?.(p);
-        } catch {
-          /* see togglePosition */
-        }
-        return { ...s, position: p };
-      });
-    },
-    [opts?.persistPosition]
-  );
+  const setPosition = useCallback((p: PanelPosition) => {
+    // Pure reducer — see togglePosition.
+    setState((s) => (s.position === p ? s : { ...s, position: p }));
+  }, []);
 
   const open = useCallback(() => {
     setState((s) => ({ ...s, open: true }));
