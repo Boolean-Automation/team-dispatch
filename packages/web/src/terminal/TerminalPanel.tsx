@@ -29,6 +29,8 @@ import React, {
 import { Terminal, type TerminalHandle } from "./Terminal.js";
 import { FindOverlay } from "./find-overlay.js";
 import { LauncherButton } from "./launcher-button.js";
+import { TabStrip } from "./tab-strip.js";
+import { useActivePty } from "./use-active-pty.js";
 import { useDragResize } from "./use-drag-resize.js";
 import { usePanelState } from "./use-panel-state.js";
 import {
@@ -86,12 +88,28 @@ export function TerminalPanel({
     transport: injectedTransport,
     meta: undefined,
   });
-  const { status, activePtyId, transport } = companion;
+  const { status, transport } = companion;
+  // S6 — the panel's single source of truth for the rendered PTY is the
+  // multi-PTY data-model hook. useCompanion still triggers the initial
+  // pty.open on `connected` (its onPty promise resolves the same pty_id);
+  // useActivePty observes the resulting `pty.opened` frame and owns the
+  // recency stack. v1 renders only the active pointer; v1.5 will iterate
+  // the full list.
+  const activePty = useActivePty(ticketId, transport, companion.onFrame);
+  const activePtyId = activePty.activePtyId;
   const [findOpen, setFindOpen] = useState(false);
   const [popoutOpen, setPopoutOpen] = useState(false);
   const termRef = useRef<TerminalHandle | null>(null);
 
   const isLive = LIVE_STATES.has(status.state) && activePtyId !== null;
+
+  // S6 — once the panel has observed at least one live PTY (via useCompanion's
+  // connect-driven open), the user owns the "is there a PTY" question. If
+  // they close the last shell, we DO NOT silently re-open — they see the
+  // "Open a shell" placeholder and click `activePty.openPty()`. This avoids
+  // the startup-race double-mint where both useCompanion's openPty AND a
+  // panel-level auto-open would fire against the same connected state.
+  // The explicit-click path is wired into the .term-fail placeholder below.
 
   // Hoist the transport onto window so the popout window can read it via
   // window.opener.terminalTransport. Update whenever the transport rebuilds
@@ -168,20 +186,31 @@ export function TerminalPanel({
     }
   }, [activePtyId, popoutOpen, panel, ticketId]);
 
-  // Ticket-route unmount: close the active PTY explicitly. useCompanion already
-  // handles the WS close; this binding is a belt-and-suspenders close frame.
+  // Ticket-route unmount: close the LATEST active PTY explicitly.
+  // useCompanion already handles the WS close; this binding is a
+  // belt-and-suspenders close frame.
+  //
+  // S6 — read the active id via a ref so the effect's cleanup fires ONCE on
+  // actual unmount, not on every pointer flip. With the multi-PTY pointer in
+  // place, depending on `activePtyId` here would close the old PTY each time
+  // a new one became active — the exact "leak the data layer into the UI"
+  // failure mode this slice exists to prevent.
+  const latestActivePtyIdRef = useRef<string | null>(activePtyId);
   useEffect(() => {
-    const ptyAtMount = activePtyId;
+    latestActivePtyIdRef.current = activePtyId;
+  }, [activePtyId]);
+  useEffect(() => {
     return () => {
-      if (ptyAtMount) {
+      const pid = latestActivePtyIdRef.current;
+      if (pid) {
         try {
-          transport.send({ t: "pty.close", pty_id: ptyAtMount });
+          transport.send({ t: "pty.close", pty_id: pid });
         } catch {
           /* transport already closed */
         }
       }
     };
-  }, [activePtyId, transport]);
+  }, [transport]);
 
   // Close button → close panel.
   const onClose = useCallback(() => {
@@ -194,18 +223,40 @@ export function TerminalPanel({
     panel.togglePosition();
   }, [panel]);
 
-  // Compute the active session label for the tab pill.
-  const sessionLabel = useMemo(() => {
-    const sess = status.sessionId ? ` · ${status.sessionId.slice(0, 4)}` : "";
-    return `${ticketId} · zsh${sess}`;
-  }, [ticketId, status.sessionId]);
-
   // Connection-dot class — emerald (connected), warn (connecting), off (else).
   const connDotClass = useMemo(() => {
     if (status.state === "connected") return "conn-dot";
     if (status.state === "connecting") return "conn-dot warn";
     return "conn-dot off";
   }, [status.state]);
+
+  // S6 — dev-only debug helper exposed on window for L2 multi-PTY evidence.
+  // Gated by import.meta.env.DEV so it disappears in prod builds. The
+  // openExtraPty handle bypasses the launcher; closeActivePty drives the
+  // useActivePty close path the same way a future close affordance would.
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    const helper = {
+      openExtraPty(targetTicket: string = ticketId): void {
+        transport.send({ t: "pty.open", ticket_id: targetTicket });
+      },
+      closeActivePty(): void {
+        if (activePtyId) activePty.closePty(activePtyId);
+      },
+      get activePtyId(): string | null {
+        return activePtyId;
+      },
+      get ptyList(): readonly string[] {
+        return activePty.ptyList;
+      },
+    };
+    (window as unknown as { __dispatchTerminal?: typeof helper }).__dispatchTerminal =
+      helper;
+    return () => {
+      const w = window as unknown as { __dispatchTerminal?: unknown };
+      if (w.__dispatchTerminal === helper) delete w.__dispatchTerminal;
+    };
+  }, [activePtyId, activePty, transport, ticketId]);
 
   if (!panel.state.open) return null;
 
@@ -240,21 +291,14 @@ export function TerminalPanel({
           ticketDisplayId={ticketId}
           transport={transport}
         />
-        <div className="term-tabs">
-          <div className="term-tab-pill" title={sessionLabel}>
-            <span className={connDotClass} aria-hidden="true" />
-            <span>{sessionLabel}</span>
-          </div>
-          <button
-            type="button"
-            className="term-act is-stub"
-            aria-disabled="true"
-            disabled
-            title="Multiple terminals — coming later"
-          >
-            <Ic.plus />
-          </button>
-        </div>
+        {/* S6 — v1: single-render; v1.5: flip .term-tabs to interactive +
+            render per pty_id. Active-PTY pointer already supports the flip. */}
+        <TabStrip
+          ticketId={ticketId}
+          activePtyId={activePtyId}
+          shellName="zsh"
+          connDotClass={connDotClass}
+        />
         <div className="term-acts">
           <button
             type="button"
@@ -315,6 +359,25 @@ export function TerminalPanel({
             fontSize={terminalSettings.font.size}
             scrollback={terminalSettings.scrollbackLines}
           />
+        ) : status.state === "connected" && activePtyId === null ? (
+          // S6 — connected but no PTY (user closed their only shell, or the
+          // auto-open hasn't landed yet). Offer an explicit "Open a shell"
+          // affordance so the panel never lives in a dead state.
+          <div className="term-fail" data-testid="terminal-open-shell">
+            <span className="ic">
+              <Ic.terminal />
+            </span>
+            <div className="ttl">No shell open</div>
+            <div className="msg">
+              Open a shell to start working in this ticket's terminal.
+            </div>
+            <button
+              className="btn-outline act"
+              onClick={() => activePty.openPty()}
+            >
+              Open a shell
+            </button>
+          </div>
         ) : (
           <TermFailure state={status.state} onRetry={companion.retry} />
         )}

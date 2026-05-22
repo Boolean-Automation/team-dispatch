@@ -25,7 +25,7 @@ class FakeTransport implements TerminalTransport {
   private handlers:
     | {
         onStatus: (s: TransportStatus) => void;
-        onFrame: (frame: unknown) => void;
+        onFrame: (frame: import("../ticket/companion-protocol.js").ServerFrame) => void;
       }
     | undefined;
   private subscribers = new Map<string, Set<(f: PtyFrame) => void>>();
@@ -40,7 +40,7 @@ class FakeTransport implements TerminalTransport {
 
   connect(handlers: {
     onStatus: (s: TransportStatus) => void;
-    onFrame: (frame: unknown) => void;
+    onFrame: (frame: import("../ticket/companion-protocol.js").ServerFrame) => void;
   }): void {
     this.handlers = handlers;
     // Resolve `connected` with a stable epoch so useCompanion calls openPty.
@@ -51,6 +51,12 @@ class FakeTransport implements TerminalTransport {
         companionStartedAt: 12345,
         capabilities: ["unicode11", "search"],
       });
+      // S6 — emit the matching pty.opened so useActivePty observes the same
+      // pty_id and the panel renders a live Terminal. Real Companion does the
+      // same thing after spawning the node-pty.
+      if (this.autoOpen) {
+        this.handlers?.onFrame({ t: "pty.opened", pty_id: this.nextPtyId });
+      }
     }, 0);
   }
 

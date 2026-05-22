@@ -6,13 +6,19 @@
 // plan §Slice 4 / A25
 
 import React, { useEffect, useState, useCallback } from "react";
-import { registerUndoToastHandler } from "../lib/use-undoable-mutation.js";
+import {
+  registerUndoToastHandler,
+  registerInfoToastHandler,
+} from "../lib/use-undoable-mutation.js";
 
 interface ToastItem {
   id: string;
+  /** Empty string for info-only toasts (no Undo button). */
   token: string;
   label: string;
   visible: boolean;
+  /** When true, no Undo button — info-only. */
+  info?: boolean;
 }
 
 interface UndoToastProps {
@@ -55,9 +61,30 @@ export function UndoToast({ autoDismissMs = 5000 }: UndoToastProps) {
     [autoDismissMs]
   );
 
+  const addInfoToast = useCallback(
+    (message: string) => {
+      const id = `info-toast-${++_toastCounter}`;
+      setToasts((prev) => [
+        ...prev,
+        { id, token: "", label: message, visible: true, info: true },
+      ]);
+
+      setTimeout(() => {
+        setToasts((prev) =>
+          prev.map((t) => (t.id === id ? { ...t, visible: false } : t))
+        );
+        setTimeout(() => {
+          setToasts((prev) => prev.filter((t) => t.id !== id));
+        }, 300);
+      }, autoDismissMs);
+    },
+    [autoDismissMs]
+  );
+
   useEffect(() => {
     registerUndoToastHandler(addToast);
-  }, [addToast]);
+    registerInfoToastHandler(addInfoToast);
+  }, [addToast, addInfoToast]);
 
   const handleUndo = useCallback(
     async (toast: ToastItem) => {
@@ -80,17 +107,19 @@ export function UndoToast({ autoDismissMs = 5000 }: UndoToastProps) {
       {toasts.map((toast) => (
         <div
           key={toast.id}
-          className={`undo-toast ${toast.visible ? "visible" : "hidden"}`}
+          className={`undo-toast ${toast.visible ? "visible" : "hidden"}${toast.info ? " info" : ""}`}
           role="status"
         >
           <span className="undo-toast-label">{toast.label}</span>
-          <button
-            className="undo-toast-btn"
-            onClick={() => void handleUndo(toast)}
-            aria-label={`Undo: ${toast.label}`}
-          >
-            Undo
-          </button>
+          {!toast.info && (
+            <button
+              className="undo-toast-btn"
+              onClick={() => void handleUndo(toast)}
+              aria-label={`Undo: ${toast.label}`}
+            >
+              Undo
+            </button>
+          )}
           <button
             className="undo-toast-close"
             onClick={() => handleDismiss(toast.id)}
