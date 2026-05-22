@@ -28,6 +28,7 @@ import {
   readTerminalSettings,
   type ClerkLikeUser,
 } from "../settings/use-terminal-settings.js";
+import { getTokenProvider } from "../lib/api-client.js";
 
 /** Launcher shape stored in Clerk publicMetadata.terminalSettings.launcher. */
 export interface LauncherConfig {
@@ -176,8 +177,13 @@ export function useLauncher(opts: UseLauncherOptions): UseLauncherResult {
         const headers: Record<string, string> = {
           "Content-Type": "application/json",
         };
-        if (getAuthToken) {
-          const token = await getAuthToken();
+        // Resolve token provider: explicit prop > global (set by clerk.tsx).
+        // The global provider is the production path — Phase 1 wired it on
+        // sign-in so every authed component can attach Authorization headers
+        // without prop-drilling. Tests inject explicit getAuthToken.
+        const tokenProvider = getAuthToken ?? getTokenProvider();
+        if (tokenProvider) {
+          const token = await tokenProvider();
           if (token) headers["Authorization"] = `Bearer ${token}`;
         }
         // The actual fetch is not awaited for completion semantics — but we
