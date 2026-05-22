@@ -271,3 +271,51 @@ describe("authenticateUpgrade", () => {
     if (!result.ok) expect(result.status).toBe(403);
   });
 });
+
+// ── Per-frame WS origin binding — Phase 2 connection-bound assertion ─────────
+//
+// Plan §S1: the connection-bound origin is asserted on every authed
+// connection. A connection authed for Origin A must NEVER end up presenting
+// frames as if it came from Origin B — the Origin pin happens at upgrade,
+// and the bridge's per-frame ownership check (pty-map) is the corollary at
+// the data-plane layer. This test pins the upgrade-time binding: a
+// `connection.origin` returned from `authenticateUpgrade` always matches the
+// presented Origin (no quiet rewrite).
+
+describe("connection-bound Origin assertion (Phase 2 / Slice 1)", () => {
+  it("the accepted connection.origin equals the presented Origin", () => {
+    const result = authenticateUpgrade(validInput(mintToken()), CONFIG);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      // The plan's binding statement: connection.origin === input.origin. A
+      // downstream per-frame WS origin assertion can re-check against this
+      // value with no surprise.
+      expect(result.connection.origin).toBe(ORIGIN);
+      // And the connection.origin MUST be on the strict allowlist (a defense
+      // against a future config bug that swaps the pin for a "must be
+      // present" check).
+      expect(CONFIG.allowedOrigins.includes(result.connection.origin)).toBe(true);
+    }
+  });
+
+  it("each accepted connection sees its OWN origin (no shared mutable state)", () => {
+    // Mint two tokens, one per origin, run two upgrades. The connection
+    // returned from each MUST carry the matching origin — not a shared one.
+    const tokenLocal = mintToken({ aud: "http://localhost:5173" });
+    const tokenProd = mintToken({ aud: "https://dispatch.paintos.app" });
+
+    const local = authenticateUpgrade(
+      { ...validInput(tokenLocal), origin: "http://localhost:5173" },
+      CONFIG
+    );
+    const prod = authenticateUpgrade(
+      { ...validInput(tokenProd), origin: "https://dispatch.paintos.app" },
+      CONFIG
+    );
+
+    expect(local.ok).toBe(true);
+    expect(prod.ok).toBe(true);
+    if (local.ok) expect(local.connection.origin).toBe("http://localhost:5173");
+    if (prod.ok) expect(prod.connection.origin).toBe("https://dispatch.paintos.app");
+  });
+});

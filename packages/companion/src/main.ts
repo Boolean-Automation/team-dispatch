@@ -1,58 +1,89 @@
 /**
- * dispatch Companion — process entry (thin consumer of the bridge core).
+ * dispatch Companion — process entry (Phase 2, thin consumer of the bridge core).
  *
- * Responsibilities ONLY:
- *   - bind an HTTP + WebSocket server to 127.0.0.1 ONLY (never 0.0.0.0 — a
- *     non-loopback bind is a spike failure),
- *   - expose a minimal `GET /healthz` for discovery (OQ-S4) — returns NO
- *     sensitive data, carries `Cache-Control: no-store`,
- *   - run the three-factor auth check (auth.ts) in the `upgrade` handler
- *     BEFORE `wss.handleUpgrade` — no PTY spawns for a bad connection,
- *   - hand each authed upgrade to a `BridgeSession`,
- *   - install a SIGTERM handler that tears down EVERY live session
- *     (process-group kill) before the process exits — no detached `claude`
- *     survives the Companion.
- *
- * Started by hand on the two pilot machines (no installer — §3.2).
+ * Responsibilities:
+ *   - ADR-007 Windows fence: refuse to run on win32 (use Phase 3 container);
+ *   - bind HTTP + WebSocket to 127.0.0.1 ONLY (never 0.0.0.0);
+ *   - expose `GET /healthz` (discovery probe) and `GET /metrics` (Prometheus)
+ *     on the same loopback HTTP server that handles the WS upgrade;
+ *   - three-factor auth check (auth.ts) BEFORE the upgrade completes — no PTY
+ *     spawns for a bad connection;
+ *   - hand each authed upgrade to `attachBridge()` (bridge.ts);
+ *   - start the idle sweeper for the pty-map (Codex F3 / R2-F2);
+ *   - SIGTERM → close all PTYs synchronously, exit 0.
  */
 
 import { createServer } from "node:http";
 import type { IncomingMessage } from "node:http";
 import { WebSocketServer } from "ws";
 import { loadConfig } from "./config.js";
+import type { CompanionConfig } from "./config.js";
 import { authenticateUpgrade } from "./auth.js";
-import { BridgeSession } from "./bridge.js";
-import type { TicketContext } from "./context.js";
-import { buildPtyEnv } from "./pty-session.js";
+import { attachBridge } from "./bridge.js";
 import { COMPANION_VERSION, MAX_FRAME_BYTES } from "./protocol.js";
+import { createPtyMap } from "./pty-map.js";
+import type { PtyMap } from "./pty-map.js";
+import { createIdleSweeper } from "./idle-sweeper.js";
+import { createMetrics } from "./metrics.js";
 
 /**
- * Build the Companion server. Returns the HTTP server, the WS server, and a
- * `closeAll` that tears every live session down — exported so a test can drive
- * the full server without `listen()` racing the test process.
+ * ADR-007 Windows fence: dispatch Companion does not run on Windows. Use the
+ * Phase 3 server-side container (status: not-yet-released) instead.
+ *
+ * Exit code 78 = EX_CONFIG from sysexits.h.
  */
-export function buildCompanionServer(config = loadConfig()) {
+export function enforceWindowsFence(
+  platform: NodeJS.Platform = process.platform,
+  logger: (msg: string) => void = (m) => console.log(m),
+  exit: (code: number) => never = process.exit.bind(process) as (code: number) => never
+): void {
+  if (platform === "win32") {
+    logger(
+      "Boolean dispatch Companion does not run on Windows. Use the Phase 3 server-side container instead (status: not-yet-released). See ADR-007."
+    );
+    exit(78);
+  }
+}
+
+/**
+ * Build the Companion server. Returns the HTTP server, the WS server, the
+ * pty-map, the sweeper, and a `closeAll` that synchronously reaps every live
+ * PTY. Exported so a test can drive the full server without `listen()` racing
+ * the test process.
+ */
+export function buildCompanionServer(config: CompanionConfig = loadConfig()) {
+  const companionStartedAt = Date.now();
+  const ptyMap: PtyMap = createPtyMap({ maxPtysPerTicket: config.maxPtysPerTicket });
+  const metrics = createMetrics({ map: ptyMap, startedAt: companionStartedAt });
+  let wsActiveCount = 0;
+
+  const sweeper = createIdleSweeper(
+    ptyMap,
+    {
+      tickMs: config.sweeperTickMs,
+      idleMs: config.sweeperIdleMs,
+      gracePauseMs: config.sweeperGracePauseMs,
+      clock: Date.now,
+    },
+    {
+      incrementReaped(reason) {
+        metrics.incrementReaped(reason);
+      },
+    }
+  );
+
   const httpServer = createServer((req, res) => {
     const pathOnly = (req.url ?? "").split("?")[0];
 
-    // The discovery probe (`GET /healthz`) is a cross-origin `fetch` from the
-    // dispatch web app — the browser enforces CORS on it (unlike the WS
-    // `upgrade`, which carries the Origin pin instead). Without an explicit
-    // `Access-Control-Allow-Origin` the browser blocks the probe and the panel
-    // wrongly shows "Companion not detected". `/healthz` is intentionally a
-    // browser-facing endpoint (spec §4.5) — so it answers CORS for the SAME
-    // strict exact-match Origin allowlist the WS upgrade pins against. An
-    // Origin not on the allowlist gets no ACAO header (the browser then blocks
-    // it) — discovery is not opened to arbitrary origins.
+    // ── /healthz — cross-origin discovery probe ─────────────────────────
     if (pathOnly === "/healthz") {
       const origin = req.headers.origin;
-      const corsHeaders: Record<string, string> = { "Vary": "Origin" };
+      const corsHeaders: Record<string, string> = { Vary: "Origin" };
       if (typeof origin === "string" && config.allowedOrigins.includes(origin)) {
         corsHeaders["Access-Control-Allow-Origin"] = origin;
         corsHeaders["Access-Control-Allow-Methods"] = "GET, OPTIONS";
       }
 
-      // CORS preflight — a browser may send OPTIONS before the GET.
       if (req.method === "OPTIONS") {
         res.writeHead(204, { ...corsHeaders, "Cache-Control": "no-store" });
         res.end();
@@ -60,8 +91,6 @@ export function buildCompanionServer(config = loadConfig()) {
       }
 
       if (req.method === "GET") {
-        // Minimal discovery payload. NO sensitive data (no token, no path,
-        // no env); no-store.
         res.writeHead(200, {
           ...corsHeaders,
           "Content-Type": "application/json",
@@ -72,20 +101,22 @@ export function buildCompanionServer(config = loadConfig()) {
       }
     }
 
+    // ── /metrics — Prometheus text on loopback ──────────────────────────
+    if (pathOnly === "/metrics" && req.method === "GET") {
+      metrics.setWsActive(wsActiveCount);
+      res.writeHead(200, {
+        "Content-Type": "text/plain; version=0.0.4; charset=utf-8",
+        "Cache-Control": "no-store",
+      });
+      res.end(metrics.render());
+      return;
+    }
+
     res.writeHead(426, { "Content-Type": "text/plain" });
     res.end("Upgrade Required");
   });
 
-  // `maxPayload` caps a frame at the protocol layer — `ws` rejects an
-  // oversized frame before buffering it, instead of buffering up to its 100 MiB
-  // default and only then hitting the app-level `MAX_FRAME_BYTES` check in
-  // `parseClientFrame`. Without this an authed (or XSS-driven) client could
-  // stream huge frames and exhaust the SE's laptop memory. The app-level check
-  // stays as defense-in-depth.
   const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_FRAME_BYTES });
-
-  /** Every live bridged session — the SIGTERM handler walks this. */
-  const liveSessions = new Set<BridgeSession>();
 
   httpServer.on("upgrade", (req: IncomingMessage, socket, head) => {
     const url = new URL(req.url ?? "/", `http://${config.host}:${config.port}`);
@@ -110,56 +141,51 @@ export function buildCompanionServer(config = loadConfig()) {
       const line = auth.status === 401 ? "401 Unauthorized" : "403 Forbidden";
       socket.write(`HTTP/1.1 ${line}\r\nConnection: close\r\n\r\n`);
       socket.destroy();
-      // Never log the token. The reason is safe — it carries no secret.
       console.error(`[companion] upgrade rejected (${auth.status}): ${auth.reason}`);
       return;
     }
 
-    const ticketContext: TicketContext = {
-      clientSlug: url.searchParams.get("clientSlug") ?? "unknown",
-      displayId: auth.connection.claims.ticketId,
-      title: url.searchParams.get("title") ?? "(no title)",
-      status: url.searchParams.get("status") ?? "unknown",
-      threadToCursor: url.searchParams.get("thread") ?? undefined,
-    };
-
     wss.handleUpgrade(req, socket, head, (ws) => {
-      const bridge = new BridgeSession(ws, {
-        pty: {
-          cwd: config.knowledgeRoot,
-          // Allowlisted env — never the Companion's full process.env. This
-          // strips COMPANION_TOKEN_SECRET so the browser-driven `claude`
-          // cannot read the token-signing key. PtySession also re-applies
-          // buildPtyEnv defensively.
-          env: buildPtyEnv(process.env),
-          // Interactive `claude` — the human in the panel drives it.
-          claudeArgs: [],
-        },
-        context: ticketContext,
+      wsActiveCount++;
+      ws.on("close", () => {
+        wsActiveCount = Math.max(0, wsActiveCount - 1);
       });
-      liveSessions.add(bridge);
-      ws.on("close", () => liveSessions.delete(bridge));
-      // `bridge.session` is undefined when the `claude` spawn failed — the
-      // bridge already sent a typed `error` frame and closed the socket; the
-      // Companion stays alive (ADR-001 "never hard-fail").
-      if (bridge.session) {
-        console.error(
-          `[companion] session ${bridge.session.sessionId} accepted ` +
-            `(ticket ${auth.connection.claims.ticketId})`
-        );
-      }
+      attachBridge(ws, {
+        ptyMap,
+        config,
+        companionStartedAt,
+        ticketId: auth.connection.claims.ticketId,
+        onPtySpawned: () => metrics.incrementSpawned(),
+      });
+      console.error(
+        `[companion] WS accepted for ticket ${auth.connection.claims.ticketId}`
+      );
     });
   });
 
-  /** Tear down every live session — process-group kill — used by SIGTERM. */
+  /** Tear down every live PTY synchronously — used by SIGTERM. */
   function closeAll(): void {
-    for (const bridge of liveSessions) {
-      bridge.teardown("companion-shutdown");
-    }
-    liveSessions.clear();
+    ptyMap.forEach((entry) => {
+      try {
+        entry.session.kill();
+      } catch {
+        /* already gone */
+      }
+      ptyMap.delete(entry.pty_id);
+      metrics.incrementReaped("sigterm");
+    });
   }
 
-  return { httpServer, wss, liveSessions, closeAll, config };
+  return {
+    httpServer,
+    wss,
+    ptyMap,
+    sweeper,
+    metrics,
+    closeAll,
+    config,
+    companionStartedAt,
+  };
 }
 
 // ── Process entry — only when run directly, not when imported by a test ──────
@@ -170,7 +196,11 @@ const isMain =
     new URL(process.argv[1], import.meta.url).pathname;
 
 if (isMain) {
-  const { httpServer, closeAll, config } = buildCompanionServer();
+  // ADR-007 Windows fence — must run BEFORE loadConfig() so a Windows machine
+  // gets the message even if env vars are misconfigured.
+  enforceWindowsFence();
+
+  const { httpServer, sweeper, closeAll, config } = buildCompanionServer();
 
   httpServer.listen(config.port, config.host, () => {
     console.error(
@@ -179,15 +209,17 @@ if (isMain) {
     console.error(
       `[companion] auth: backend-minted token + strict Origin allowlist + loopback Host pin`
     );
-    console.error(`[companion] claude cwd: ${config.knowledgeRoot}`);
+    console.error(`[companion] shell cwd: ${config.knowledgeRoot}`);
+    console.error(`[companion] metrics: http://${config.host}:${config.port}/metrics`);
   });
 
-  // SIGTERM — tear down every live session before exit. No detached `claude`.
+  sweeper.start();
+
   const shutdown = () => {
     console.error("[companion] SIGTERM — tearing down all live sessions");
+    sweeper.stop();
     closeAll();
     httpServer.close(() => process.exit(0));
-    // Hard backstop if close hangs.
     setTimeout(() => process.exit(0), 3000).unref();
   };
   process.on("SIGTERM", shutdown);
