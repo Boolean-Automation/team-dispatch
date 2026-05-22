@@ -170,15 +170,65 @@
   cursor: pointer;
 }
 
-.term-launch:hover {
+.term-launch:hover:not(:disabled) {
   background: rgba(245, 158, 11, 0.18);
   border-color: rgba(245, 158, 11, 0.5);
+}
+
+.term-launch:disabled,
+.term-launch[aria-disabled="true"] {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .term-launch .icon,
 .term-launch .icon-sm {
   width: 12px;
   height: 12px;
+}
+
+/* ── Phase 2 / Slice 4 — launcher consent modal (Codex F5) ─────────────── */
+
+.launcher-consent-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+}
+
+.launcher-consent-modal {
+  background: var(--raised, #1E293B);
+  color: var(--text-1, #E5E7EB);
+  border: 1px solid var(--border-strong, #334155);
+  border-radius: var(--r-md, 8px);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+  padding: 24px 24px 18px;
+  max-width: 520px;
+  width: calc(100% - 48px);
+}
+
+.launcher-consent-title {
+  margin: 0 0 12px;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.launcher-consent-body p {
+  margin: 0 0 10px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-2, #CBD5E1);
+}
+
+.launcher-consent-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 18px;
 }
 
 .term-tabs {

@@ -28,6 +28,7 @@ import React, {
 } from "react";
 import { Terminal, type TerminalHandle } from "./Terminal.js";
 import { FindOverlay } from "./find-overlay.js";
+import { LauncherButton } from "./launcher-button.js";
 import { useDragResize } from "./use-drag-resize.js";
 import { usePanelState } from "./use-panel-state.js";
 import {
@@ -211,11 +212,16 @@ export function TerminalPanel({
         data-testid="terminal-splitter"
       />
       <div className="term-bar">
-        {/* §3.1 launcher slot — S4 fills this in. */}
-        <div className="term-launch" aria-disabled="true" data-stub="s4">
-          <Ic.bolt />
-          <span>claude</span>
-        </div>
+        {/* §3.1 launcher slot — S4 fills the empty slot scaffolded in S3.
+            The button reads Clerk publicMetadata.terminalSettings.launcher
+            (default {label:'Claude',command:'claude'}). Click writes
+            `command + \r` bytes to the active PTY via transport.send and
+            fire-and-forgets a SHA-256-hashed audit POST. */}
+        <LauncherButton
+          activePtyId={activePtyId}
+          ticketDisplayId={ticketId}
+          transport={transport}
+        />
         <div className="term-tabs">
           <div className="term-tab-pill" title={sessionLabel}>
             <span className={connDotClass} aria-hidden="true" />

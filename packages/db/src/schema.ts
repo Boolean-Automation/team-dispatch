@@ -1,8 +1,9 @@
-// dispatch — Drizzle schema: four domain entities + six support/infrastructure tables
+// dispatch — Drizzle schema: four domain entities + seven support/infrastructure tables
 //
 // Domain entities:   accounts, contacts, tickets, messages
 // Support tables:    internal_thread_messages, notifications, audit_log,
-//                    reassignments, reinforcements, slack_outbox
+//                    reassignments, reinforcements, slack_outbox,
+//                    audit_launcher_fired
 //
 // No local Engineer/User table — Clerk is the identity store.
 // tickets.assignee and accounts.owning_se are Clerk user id strings.
@@ -13,6 +14,7 @@
 //   0002_follow_up_1_sent.sql — follow_up_1_sent_at + enum extension (Slice 6)
 //   0003_effort_bucket_check.sql — effort_bucket DB CHECK (Slice 7)
 //   0004_reassignment_reinforcement.sql — reassignments + reinforcements (Slice 7)
+//   0007_audit_launcher_fired.sql — audit_launcher_fired (Phase 2 / Slice 4)
 //
 // reassignments and reinforcements are defined here in the Drizzle schema so
 // Slice 3 types compile cleanly, but their SQL migration ships in Slice 7.
@@ -436,6 +438,53 @@ export const slackOutbox = pgTable("slack_outbox", {
   sentAt: timestamp("sent_at", { withTimezone: true }),
 });
 
+// ── audit_launcher_fired ─────────────────────────────────────────────────────
+//
+// Phase 2 / Slice 4 — server-side hash-only audit log of terminal launcher
+// button clicks. Codex F5 binding.
+//
+// Each row records one launcher fire:
+//   user_id           — Clerk user id of the SE who fired the launcher
+//   ticket_display_id — DSP-NNNN of the ticket the panel was open on
+//   command_hash      — SHA-256 hex of the configured command (64 hex chars),
+//                       computed CLIENT-side via crypto.subtle.digest. The raw
+//                       command itself never leaves the SE's browser.
+//   label             — cosmetic launcher label ("Claude", "codex", …)
+//   fired_at          — server clock; the audit truth, not the client clock
+//
+// The dispatch operator (Cody/Chris) reads this table directly if a compromise
+// is suspected. SEs do not see it. The two BTREE indexes optimize for
+//   (a) per-user-recent reads — "show me what user X fired last week"
+//   (b) per-ticket-recent reads — "what launcher fires happened on DSP-2841?"
+//
+// SQL migration: 0007_audit_launcher_fired.sql.
+
+export const auditLauncherFired = pgTable(
+  "audit_launcher_fired",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: text("user_id").notNull(),
+    ticketDisplayId: text("ticket_display_id").notNull(),
+    commandHash: text("command_hash").notNull(),
+    label: text("label").notNull(),
+    firedAt: timestamp("fired_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => ({
+    // Index for per-user-recent reads ("show me my launcher fires").
+    userFiredAtIdx: index("audit_launcher_fired_user_fired_at_idx").on(
+      t.userId,
+      t.firedAt.desc()
+    ),
+    // Index for per-ticket-recent reads ("what fired on DSP-2841?").
+    ticketFiredAtIdx: index("audit_launcher_fired_ticket_fired_at_idx").on(
+      t.ticketDisplayId,
+      t.firedAt.desc()
+    ),
+  })
+);
+
 // ── type exports ──────────────────────────────────────────────────────────────
 
 export type Account = typeof accounts.$inferSelect;
@@ -468,3 +517,6 @@ export type NewReinforcement = typeof reinforcements.$inferInsert;
 
 export type SlackOutbox = typeof slackOutbox.$inferSelect;
 export type NewSlackOutbox = typeof slackOutbox.$inferInsert;
+
+export type AuditLauncherFired = typeof auditLauncherFired.$inferSelect;
+export type NewAuditLauncherFired = typeof auditLauncherFired.$inferInsert;
