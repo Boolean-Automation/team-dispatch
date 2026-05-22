@@ -1,15 +1,15 @@
-// dispatch — useCompanion: the Companion connection hook.
+// dispatch — useCompanion: the Companion connection hook (Phase 2 / Slice 3).
 //
-// CRITICAL — the degradation seam (ADR-001, plan risk #6): this hook depends
-// on a `TerminalTransport` INTERFACE, never on a `WebSocket` or the
-// `companion-ws-transport` concrete class directly. It is constructed with the
-// real `CompanionWsTransport` by default, and the spike proves it accepts the
-// `FallbackTransportStub` UNCHANGED. All failure states route THROUGH the
-// transport seam — none into a dead end.
+// CRITICAL — the degradation seam (ADR-001): this hook depends on a
+// `TerminalTransport` INTERFACE, never on a `WebSocket` or the concrete
+// `CompanionWsTransport` class directly. It accepts the `FallbackTransportStub`
+// UNCHANGED. All failure states route THROUGH the transport seam.
 //
-// On no-Companion, or a failed/malformed handshake (the port-squat case), the
-// hook resolves cleanly to `not-detected` — it does NOT hang or throw
-// (ACs A14, A12c).
+// Phase 2 multi-PTY upgrade:
+//   - The hook opens ONE PTY per ticket on connect, stores the pty_id as
+//     `activePtyId`, and exposes per-PTY helpers (`send`, `resize`, `close`).
+//   - On Companion restart (epoch change), the existing pty_id is treated as
+//     dead and a fresh `pty.open` is issued (Phase 2 no-resume binding).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
@@ -27,58 +27,50 @@ export interface UseCompanionOptions {
   ticketId: string;
   /** The dispatch web app origin (audience binding). */
   origin?: string;
-  /** Ticket metadata for the context-injection preamble (A15 / OQ-S2). */
+  /** Ticket metadata for the context-injection preamble. */
   meta?: CompanionSessionMeta;
-  /**
-   * The transport to use. Defaults to the real `CompanionWsTransport`.
-   * The spike substitutes `FallbackTransportStub` here to prove the seam —
-   * the hook and `PanelTerminal` accept it with no change.
-   */
+  /** Inject a transport (default: real `CompanionWsTransport`). */
   transport?: TerminalTransport;
   /** When false, the hook stays idle and opens no transport. */
   enabled?: boolean;
 }
 
 export interface UseCompanionResult {
-  /** The current connection status (state + sessionId + detail). */
+  /** The current connection status (state + sessionId + detail + caps). */
   status: TransportStatus;
-  /** Send a client frame (keystrokes) toward the session. */
+  /** The current active PTY id for this ticket — null before pty.opened. */
+  activePtyId: string | null;
+  /** The transport. Exposed so consumers can wire `Terminal` directly. */
+  transport: TerminalTransport;
+  /** Send a typed client frame. */
   send: (frame: ClientFrame) => void;
-  /** Resize the PTY. */
+  /** Resize the PTY (by pty_id). */
   resize: (cols: number, rows: number) => void;
-  /** Subscribe to inbound server frames (xterm.js writes from these). */
+  /** Subscribe to any inbound server frame. */
   onFrame: (cb: (frame: ServerFrame) => void) => () => void;
-  /** Re-run discovery + connect — the Retry button (A14). */
+  /** Re-run discovery + connect (Retry button). */
   retry: () => void;
 }
 
 export function useCompanion(opts: UseCompanionOptions): UseCompanionResult {
   const { ticketId, enabled = true } = opts;
   const origin = opts.origin ?? window.location.origin;
-  // Destructure meta to primitives so the effect dep list stays stable
-  // (an object literal would rebuild the transport on every render).
   const metaStatus = opts.meta?.status;
   const metaClientSlug = opts.meta?.clientSlug;
   const metaTitle = opts.meta?.title;
 
   const [status, setStatus] = useState<TransportStatus>({ state: "idle" });
+  const [activePtyId, setActivePtyId] = useState<string | null>(null);
   const [retryNonce, setRetryNonce] = useState(0);
 
-  // Frame subscribers — xterm.js subscribes here to write PTY output.
   const frameSubscribers = useRef(new Set<(frame: ServerFrame) => void>());
   const transportRef = useRef<TerminalTransport | null>(null);
 
-  // A caller-supplied transport is a stable reference for the spike's seam
-  // proof; the default real transport is rebuilt per (ticket, retry).
   const injectedTransport = opts.transport;
 
-  useEffect(() => {
-    if (!enabled) {
-      setStatus({ state: "idle" });
-      return;
-    }
-
-    const transport: TerminalTransport =
+  // Build (or reuse) a transport whose lifetime is tied to (ticket, retry).
+  const transport = useMemo<TerminalTransport>(() => {
+    return (
       injectedTransport ??
       new CompanionWsTransport({
         ticketId,
@@ -88,20 +80,8 @@ export function useCompanion(opts: UseCompanionOptions): UseCompanionResult {
           clientSlug: metaClientSlug,
           title: metaTitle,
         },
-      });
-    transportRef.current = transport;
-
-    transport.connect({
-      onStatus: (s) => setStatus(s),
-      onFrame: (frame) => {
-        for (const cb of frameSubscribers.current) cb(frame);
-      },
-    });
-
-    return () => {
-      transport.close();
-      transportRef.current = null;
-    };
+      })
+    );
     // retryNonce is intentionally a dep — bumping it rebuilds the transport.
   }, [
     enabled,
@@ -114,13 +94,71 @@ export function useCompanion(opts: UseCompanionOptions): UseCompanionResult {
     retryNonce,
   ]);
 
+  useEffect(() => {
+    if (!enabled) {
+      setStatus({ state: "idle" });
+      return;
+    }
+    transportRef.current = transport;
+
+    let cancelled = false;
+    let lastEpoch: number | undefined;
+
+    transport.connect({
+      onStatus: (s) => {
+        if (cancelled) return;
+        setStatus(s);
+        // On first `connected`, open a PTY. On Companion-restart (epoch change),
+        // re-open: Phase 2 no-resume binding.
+        if (s.state === "connected") {
+          const epoch = s.companionStartedAt;
+          if (epoch !== undefined && epoch !== lastEpoch) {
+            lastEpoch = epoch;
+            setActivePtyId(null);
+            transport
+              .openPty(ticketId)
+              .then((pid) => {
+                if (!cancelled) setActivePtyId(pid);
+              })
+              .catch(() => {
+                /* surfaced via onStatus */
+              });
+          }
+        }
+      },
+      onFrame: (frame) => {
+        for (const cb of frameSubscribers.current) cb(frame);
+      },
+    });
+
+    return () => {
+      cancelled = true;
+      // Close the PTY explicitly on unmount so the Companion sweeps it.
+      if (activePtyId) {
+        try {
+          transport.closePty(activePtyId);
+        } catch {
+          /* already torn down */
+        }
+      }
+      transport.close();
+      transportRef.current = null;
+    };
+    // activePtyId only references the latest by closure; we don't want it as
+    // a dep here (we'd tear down on every pty.opened).
+  }, [transport, enabled, ticketId]);
+
   const send = useCallback((frame: ClientFrame) => {
     transportRef.current?.send(frame);
   }, []);
 
-  const resize = useCallback((cols: number, rows: number) => {
-    transportRef.current?.resize(cols, rows);
-  }, []);
+  const resize = useCallback(
+    (cols: number, rows: number) => {
+      if (!activePtyId) return;
+      transportRef.current?.resize(activePtyId, cols, rows);
+    },
+    [activePtyId]
+  );
 
   const onFrame = useCallback((cb: (frame: ServerFrame) => void) => {
     frameSubscribers.current.add(cb);
@@ -134,7 +172,15 @@ export function useCompanion(opts: UseCompanionOptions): UseCompanionResult {
   }, []);
 
   return useMemo(
-    () => ({ status, send, resize, onFrame, retry }),
-    [status, send, resize, onFrame, retry]
+    () => ({
+      status,
+      activePtyId,
+      transport,
+      send,
+      resize,
+      onFrame,
+      retry,
+    }),
+    [status, activePtyId, transport, send, resize, onFrame, retry]
   );
 }

@@ -1,36 +1,27 @@
 // dispatch — fallback-transport.stub: the Phase-1 degradation-seam proof.
 //
 // This is a TRIVIAL no-op `TerminalTransport`. It exists ONLY to prove the
-// seam: `PanelTerminal` / `useCompanion` accept this stub WITHOUT modification,
-// which proves Phase 2 can swap in a real server-side fallback transport by
-// replacing THIS ONE FILE and touching nothing else in the component.
+// seam: components that depend on `TerminalTransport` accept this stub
+// WITHOUT modification, which proves Phase 2 can swap in a real server-side
+// fallback transport by replacing THIS ONE FILE and touching nothing else.
 //
 // It is NOT a fallback engine. There is no Agent SDK, no Anthropic Console
 // org, no server-side model call here. `connect()` is a defined no-op that
 // resolves immediately to a `degraded` state; `send()` throws — there is no
 // engine behind it yet.
-//
-// Phase 2 replaces this file with the real server-side fallback transport.
 
 import type {
   TerminalTransport,
   TransportHandlers,
+  PtyFrame,
 } from "./terminal-transport.js";
 import type { ClientFrame } from "./companion-protocol.js";
 
-/**
- * The no-op stub fallback transport. Implements `TerminalTransport` exactly so
- * the type system — and `PanelTerminal` — accept it interchangeably with the
- * real `companion-ws-transport`.
- */
 export class FallbackTransportStub implements TerminalTransport {
   private handlers: TransportHandlers | undefined;
 
   connect(handlers: TransportHandlers): void {
     this.handlers = handlers;
-    // A defined no-op: resolve immediately to the `degraded` state. The panel
-    // renders a defined fallback UI for `degraded` — the failure path routes
-    // INTO the seam, not into a dead end.
     this.handlers.onStatus({
       state: "degraded",
       detail: "Phase 2 server-side fallback transport — not built in the spike.",
@@ -38,12 +29,29 @@ export class FallbackTransportStub implements TerminalTransport {
   }
 
   send(_frame: ClientFrame): void {
-    // No engine behind the stub. A real fallback transport would forward this.
     throw new Error("Phase 2 server-side fallback — not built in the spike.");
   }
 
-  resize(_cols: number, _rows: number): void {
-    // No-op — the stub has no live session to resize.
+  openPty(_ticketId: string): Promise<string> {
+    return Promise.reject(
+      new Error("Phase 2 server-side fallback — not built in the spike.")
+    );
+  }
+
+  subscribe(_pty_id: string, _listener: (f: PtyFrame) => void): () => void {
+    return () => {};
+  }
+
+  write(_pty_id: string, _data: string): void {
+    /* no-op */
+  }
+
+  resize(_pty_id: string, _cols: number, _rows: number): void {
+    /* no-op */
+  }
+
+  closePty(_pty_id: string): void {
+    /* no-op */
   }
 
   close(): void {

@@ -52,3 +52,17 @@ export interface TerminalSubscribeTransport {
    */
   write(pty_id: string, data: string): void;
 }
+
+/**
+ * The send-side of the Phase 2 multi-PTY contract. Slice 3 implements this on
+ * the singleton transport so the TerminalPanel can issue pty.open / pty.close
+ * / pty.resize frames without reaching into the WS guts.
+ */
+export interface TerminalSendTransport {
+  /** Open a new PTY for the given ticket. Returns the server-minted pty_id. */
+  openPty(ticketId: string): Promise<string>;
+  /** Close a PTY (and the panel-side subscription). */
+  closePty(pty_id: string): void;
+  /** Resize a PTY. */
+  resizePty(pty_id: string, cols: number, rows: number): void;
+}

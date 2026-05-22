@@ -12,6 +12,7 @@ import "./styles/issues.css";
 import "./styles/ticket-detail.css";
 import "./styles/settings.css";
 import "./styles/analytics.css";
+import "./styles/terminal.css";
 
 const rootEl = document.getElementById("root");
 if (!rootEl) throw new Error("Root element #root not found");

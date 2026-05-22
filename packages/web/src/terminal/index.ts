@@ -36,6 +36,14 @@ export {
 
 export type {
   TerminalSubscribeTransport,
+  TerminalSendTransport,
   TerminalFrame,
   TerminalFrameSubscriber,
 } from "./transport-contract.js";
+
+export {
+  installTerminalTransportOnWindow,
+  getInstalledTerminalTransport,
+  getPopoutBridge,
+} from "./popout-bridge.js";
+export type { PopoutBridge, SettingsChannel } from "./popout-bridge.js";
