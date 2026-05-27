@@ -130,6 +130,9 @@ export const auditEventEnum = pgEnum("audit_event", [
 // One row per client. slug is the human-readable key (matches _registry.yaml).
 // email_domains and slack_channel_ids are string arrays (Postgres TEXT[]).
 // owning_se is a Clerk user id — the SE this Account routes to by default.
+// highlights_synced_at: set by sync-highlights-from-knowledge.ts; null = not yet
+//   synced. Script skips rows where updated_at > highlights_synced_at so that
+//   operator edits (via PATCH /api/accounts/:id/highlights) are preserved.
 
 export const accounts = pgTable("accounts", {
   id: uuid("id").defaultRandom().primaryKey(),
@@ -141,6 +144,43 @@ export const accounts = pgTable("accounts", {
   health: accountHealthEnum("health").notNull().default("good"),
   highlights: text("highlights"), // human-curated rich text
   highlightsSourcePath: text("highlights_source_path"),
+  // Added in 0009_accounts_highlights_synced_at.sql:
+  highlightsSyncedAt: timestamp("highlights_synced_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
+// ── internal_channels ─────────────────────────────────────────────────────────
+//
+// Boolean-internal Slack channel IDs. Messages from these channels are
+// classified origin_class='internal' and generate no Ticket.
+// Added in 0008_internal_substrate.sql.
+
+export const internalChannels = pgTable("internal_channels", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  channelId: text("channel_id").notNull().unique(),
+  label: text("label"),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
+// ── internal_users ────────────────────────────────────────────────────────────
+//
+// Boolean staff Clerk user IDs. When ingest-message sees an authorRef in this
+// set inside a client channel, INGESTION_INTERNAL_AUTHOR_POLICY governs routing.
+// Seed via packages/db/src/scripts/seed-internal-users.ts (reads from env).
+// Added in 0008_internal_substrate.sql.
+
+export const internalUsers = pgTable("internal_users", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  clerkId: text("clerk_id").notNull().unique(),
+  slackId: text("slack_id"),
+  label: text("label"),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),
@@ -520,3 +560,9 @@ export type NewSlackOutbox = typeof slackOutbox.$inferInsert;
 
 export type AuditLauncherFired = typeof auditLauncherFired.$inferSelect;
 export type NewAuditLauncherFired = typeof auditLauncherFired.$inferInsert;
+
+export type InternalChannel = typeof internalChannels.$inferSelect;
+export type NewInternalChannel = typeof internalChannels.$inferInsert;
+
+export type InternalUser = typeof internalUsers.$inferSelect;
+export type NewInternalUser = typeof internalUsers.$inferInsert;
