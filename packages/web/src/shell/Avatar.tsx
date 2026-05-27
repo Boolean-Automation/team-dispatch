@@ -9,17 +9,22 @@ interface AvatarProps {
   engKey: string | null | undefined;
   /** Pixel size — default 18 */
   size?: number;
+  /** Accessible label override (used for contact avatars in cards) */
+  alt?: string;
 }
 
-export function Avatar({ engKey, size = 18 }: AvatarProps) {
+export function Avatar({ engKey, size = 18, alt }: AvatarProps) {
   const fontSize = Math.round(size * 0.5);
 
   if (!engKey) {
+    const label = alt ?? "Unassigned";
     return (
       <span
         className="avatar unassigned"
         style={{ width: size, height: size, fontSize }}
-        title="Unassigned"
+        title={label}
+        aria-label={label}
+        role="img"
       >
         ?
       </span>
@@ -29,6 +34,7 @@ export function Avatar({ engKey, size = 18 }: AvatarProps) {
   const e = ENGINEERS[engKey];
   if (!e) {
     // Unknown key — render a grey placeholder
+    const label = alt ?? "Contact avatar";
     return (
       <span
         className="avatar"
@@ -38,17 +44,22 @@ export function Avatar({ engKey, size = 18 }: AvatarProps) {
           height: size,
           fontSize,
         }}
-        title={engKey}
+        title={label}
+        aria-label={label}
+        role="img"
       >
         ?
       </span>
     );
   }
 
+  const label = alt ?? e.name;
   return (
     <span
       className="avatar"
-      title={e.name}
+      title={label}
+      aria-label={label}
+      role="img"
       style={{ background: e.color, width: size, height: size, fontSize }}
     >
       {e.initials[0]}
