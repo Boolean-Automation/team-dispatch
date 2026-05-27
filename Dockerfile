@@ -49,6 +49,12 @@ COPY --from=builder /app/packages/core/dist ./packages/core/dist
 COPY --from=builder /app/packages/db/dist ./packages/db/dist
 COPY --from=builder /app/packages/db/drizzle ./packages/db/drizzle
 
+# Stage 1 ingestion substrate: bundle _registry.yaml so the classifier can
+# route client channel messages without a DB substrate (Stage 2).
+# REGISTRY_PATH=/app/registry.yaml is set as a Railway env var to point here.
+# See: packet §Ingestion Stage 1 + ADR §A1 / Rollback plan.
+COPY boolean-knowledge/clients/_registry.yaml ./registry.yaml
+
 EXPOSE 3000
 
 # Run migrations then start the API server
