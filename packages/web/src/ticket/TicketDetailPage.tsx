@@ -261,10 +261,11 @@ export function TicketDetailPage() {
           {tab !== "linked" && tab !== "internal" && (
             <Composer
               ticketId={ticket.id}
-              toName="Andre Patel"
+              senderDisplayName={ticket.clientName ?? null}
               channelName={channelName}
               onSend={handleSend}
               sending={sendReplyMutation.isPending}
+              disabled={ticket.status === "closed" || ticket.status === "complete"}
             />
           )}
         </div>
