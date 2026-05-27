@@ -287,6 +287,7 @@
   padding: 1px 5px; border: 1px solid var(--border-strong);
   border-radius: 3px;
 }
+.msg-role.admin  { color: var(--purple); border-color: rgba(168,85,247,0.30); }
 .msg-role.client { color: var(--blue); border-color: rgba(59,130,246,0.30); }
 .msg-role.eng    { color: var(--text-2); }
 .msg-time {
@@ -306,6 +307,28 @@
   padding: 1px 5px;
   background: var(--raised); border-radius: 3px;
   color: #6EE7B7;
+}
+
+/* ===== @-MENTION CHIP ===== */
+.mention {
+  background: var(--emerald-soft);
+  color: var(--emerald);
+  font-weight: 600;
+  padding: 2px 5px;
+  border-radius: var(--r-sm);
+  display: inline;
+  white-space: nowrap;
+  cursor: default;
+}
+.mention:hover {
+  box-shadow: 0 0 0 1px var(--emerald);
+}
+.mention[data-mention-role="client"] {
+  background: rgba(59,130,246,0.12);
+  color: var(--blue);
+}
+.mention[data-mention-role="client"]:hover {
+  box-shadow: 0 0 0 1px var(--blue);
 }
 
 /* Internal-thread distinct treatment */
