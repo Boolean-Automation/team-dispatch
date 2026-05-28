@@ -43,6 +43,8 @@ export interface Account {
   displayName: string;
   health: AccountHealth;
   highlights?: string;
+  highlightsSourcePath?: string;
+  highlightsSyncedAt?: string;
   owningSe?: string; // Clerk user id
 }
 

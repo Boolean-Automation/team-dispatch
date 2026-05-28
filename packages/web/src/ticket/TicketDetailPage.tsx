@@ -25,6 +25,7 @@ import { TicketHeader } from "./TicketHeader";
 import { TicketTabs } from "./TicketTabs";
 import type { TicketTab } from "./TicketTabs";
 import { Highlights } from "./Highlights";
+import type { HighlightsData } from "./Highlights";
 import { ChatThread } from "./ChatThread";
 import { InternalThread } from "./InternalThread";
 import { RightPanel } from "./RightPanel";
@@ -85,7 +86,7 @@ export function TicketDetailPage() {
   const { displayId } = useParams<{ displayId: string }>();
   const [tab, setTab] = useState<TicketTab>("chat");
   const [panel, setPanel] = useState<PanelMode>("info");
-  const [highlights, setHighlights] = useState<string | null>(null);
+  const [highlights, setHighlights] = useState<HighlightsData | null>(null);
   const [highlightsSaved, setHighlightsSaved] = useState(false);
 
   // ── Data fetching ──────────────────────────────────────────────────────────
@@ -131,12 +132,16 @@ export function TicketDetailPage() {
           createdAt: e.createdAt,
         })) ?? []);
 
-  const accountHighlights =
+  // Build the HighlightsData object from account query data.
+  // null → component returns null (section absent from DOM — no placeholder).
+  const accountHighlights: HighlightsData | null =
     highlightsSaved
       ? highlights
       : apiUnavailable
       ? FIXTURE_HIGHLIGHTS
-      : (accountQuery.data?.highlights ?? null);
+      : accountQuery.data?.highlights
+      ? { content: accountQuery.data.highlights, sourcePath: accountQuery.data.highlightsSourcePath }
+      : null;
 
   // ── Reply mutation ─────────────────────────────────────────────────────────
   const sendReplyMutation = useUndoableMutation({
@@ -171,7 +176,7 @@ export function TicketDetailPage() {
     (text: string) => {
       if (!ticket?.id || apiUnavailable) {
         // Dev mode: just update local state
-        setHighlights(text);
+        setHighlights({ content: text });
         setHighlightsSaved(true);
         return;
       }
@@ -180,7 +185,7 @@ export function TicketDetailPage() {
         `/api/accounts/${ticket.accountId}/highlights`,
         { highlights: text }
       ).then(() => {
-        setHighlights(text);
+        setHighlights({ content: text });
         setHighlightsSaved(true);
       });
     },
@@ -243,8 +248,6 @@ export function TicketDetailPage() {
           {tab !== "linked" && (
             <Highlights
               highlights={accountHighlights}
-              sourcePath="boolean-knowledge / clients / prorise.md"
-              lastEdited="4d ago"
               onSave={handleHighlightsSave}
             />
           )}

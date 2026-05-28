@@ -1,36 +1,49 @@
 // dispatch — Highlights: Account Highlights box
 //
-// Renders the human-curated account highlights text with edit button.
-// Phase-1 scope: read from account.highlights, Edit affordance calls
-// PATCH /api/accounts/:id/highlights.
+// Packet §ADR Code-level floors #12:
+//   Component contract: { content, sourcePath, editedAt } | null
+//   null → component returns null (section absent from DOM — NOT a placeholder)
+//   "No highlights yet" string is DELETED from this codebase per the packet ADR.
 //
-// Ported from ticket-detail.jsx Highlights component.
+// Server-side truncation at 500 chars (word-boundary + "…") is enforced by
+// sync-highlights-from-knowledge.ts. Do NOT use CSS line-clamp here —
+// it breaks copy-paste and screen readers (packet ADR §Code-level floors #8).
+//
+// Phase-1 scope: read highlights from account.highlights; Edit affordance
+// calls PATCH /api/accounts/:id/highlights.
 
 import React, { useState } from "react";
 import Ic from "../shell/Ic";
 
-interface HighlightsProps {
-  /** Current highlights text — null means not set */
-  highlights: string | null;
-  /** Source path label (e.g. boolean-knowledge/clients/prorise.md) */
+export interface HighlightsData {
+  /** Highlights text (already truncated at 500 chars server-side) */
+  content: string;
+  /** Source path label (e.g. "clients/roll-call-painting/profile.md") */
   sourcePath?: string;
-  /** Last edited display string (e.g. "4d ago by Celine") */
-  lastEdited?: string;
+  /** Last edited display string (e.g. "4d ago" or "May 24") */
+  editedAt?: string;
+}
+
+interface HighlightsProps {
+  /**
+   * Highlights data from the server, or null when there is no content.
+   * null → the component returns null (section is absent from DOM).
+   * "No highlights yet" text is NEVER rendered.
+   */
+  highlights: HighlightsData | null;
   /** Called when the user saves a highlights edit */
   onSave?: (text: string) => void;
 }
 
-export function Highlights({
-  highlights,
-  sourcePath,
-  lastEdited,
-  onSave,
-}: HighlightsProps) {
+export function Highlights({ highlights, onSave }: HighlightsProps) {
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(highlights ?? "");
+  const [draft, setDraft] = useState(highlights?.content ?? "");
+
+  // null → absent from DOM per packet contract
+  if (!highlights && !editing) return null;
 
   function handleEdit() {
-    setDraft(highlights ?? "");
+    setDraft(highlights?.content ?? "");
     setEditing(true);
   }
 
@@ -40,9 +53,11 @@ export function Highlights({
   }
 
   function handleCancel() {
-    setDraft(highlights ?? "");
+    setDraft(highlights?.content ?? "");
     setEditing(false);
   }
+
+  const { content = "", sourcePath, editedAt } = highlights ?? {};
 
   return (
     <div className="highlights">
@@ -90,22 +105,22 @@ export function Highlights({
           autoFocus
         />
       ) : (
-        <div className="highlights-body">
-          {highlights ? (
-            highlights
-          ) : (
-            <span style={{ color: "var(--text-3)", fontStyle: "italic" }}>
-              No highlights yet. Click Edit to add account context.
-            </span>
-          )}
-        </div>
+        <div className="highlights-body">{content}</div>
       )}
 
-      {(sourcePath || lastEdited) && (
+      {(sourcePath || editedAt) && (
         <div className="highlights-foot">
-          {sourcePath && <span>{sourcePath}</span>}
-          {sourcePath && lastEdited && <span>·</span>}
-          {lastEdited && <span>Edited {lastEdited}</span>}
+          {sourcePath && (
+            <span
+              className="mono"
+              title={sourcePath}
+              style={{ fontFamily: "var(--font-mono)", fontSize: 10 }}
+            >
+              {sourcePath.split("/").slice(-2).join(" / ")}
+            </span>
+          )}
+          {sourcePath && editedAt && <span>·</span>}
+          {editedAt && <span>Edited {editedAt}</span>}
         </div>
       )}
     </div>
