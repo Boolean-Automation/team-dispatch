@@ -1,0 +1,221 @@
+# boolean-knowledge/clients/_registry.yaml
+#
+# Structured client registry for dispatch (ADR-003).
+# Populated 2026-05-20 from per-client profile.md files (one-time authoring pass).
+# Hand-maintained going forward — do NOT regenerate by parsing profile.md prose.
+#
+# Fields per entry:
+#   slug              — matches the clients/<slug>/ directory name
+#   display_name      — human-readable account name
+#   email_domains     — list of email domains clients use (empty = unknown)
+#   slack_channel_ids — list of Slack channel IDs for this client
+#   owning_se         — Clerk user id of the primary SE (null = unowned)
+#
+# SE Clerk user id map (Slack user ids used as owning_se; Clerk ids
+# assigned at Clerk dashboard setup — these are the Slack UIDs from profiles,
+# to be updated with real Clerk ids once the Clerk app is configured):
+#   Celine Alinea    → U09HQE6PL1G
+#   Chris            → U04CMHGF4GY
+#   Dan Labrador     → U092MLBGJ9F
+#   Eveguel          → U065NMJG8D8
+#   Rensy Lomboy     → U07LSTM6J91
+#
+# internal_channel_ids: Slack channels that are Boolean-internal.
+# A message in these channels produces NO ticket (spec §5.1, A10).
+
+clients:
+  - slug: a-and-a-painting
+    display_name: A & A Painting
+    email_domains: []
+    slack_channel_ids:
+      - C07QHC7JKH9
+    owning_se: U092MLBGJ9F  # Dan Labrador
+
+  - slug: acp-painting
+    display_name: ACP Painting
+    email_domains: []
+    slack_channel_ids:
+      - C04HU6821HT
+    owning_se: U09HQE6PL1G  # Celine Alinea
+
+  - slug: all-american-painting-plus
+    display_name: All American Painting Plus
+    email_domains: []
+    slack_channel_ids:
+      - C06BNC6BCJG
+    owning_se: U09HQE6PL1G  # Celine Alinea
+
+  - slug: allbright-pro-painting
+    display_name: Allbright Pro Painting
+    email_domains: []
+    slack_channel_ids:
+      - C08JX590YKY
+    owning_se: U07LSTM6J91  # Rensy Lomboy
+
+  - slug: blair-commercial-painting
+    display_name: Blair Commercial Painting
+    email_domains: []
+    slack_channel_ids:
+      - C0A1YNRMACT
+    owning_se: U04CMHGF4GY  # Chris
+
+  - slug: c-and-a-painting
+    display_name: C & A Painting
+    email_domains: []
+    slack_channel_ids: []
+    # Channel PENDING_CNA — real ID not yet assigned; leave empty until confirmed
+    owning_se: U09HQE6PL1G  # Celine Alinea
+
+  - slug: connor-painting
+    display_name: Connor Painting
+    email_domains: []
+    slack_channel_ids:
+      - C06JHCE67PW
+    owning_se: U09HQE6PL1G  # Celine Alinea
+
+  - slug: dennis-moffit-painting
+    display_name: Dennis Moffit Painting
+    email_domains: []
+    slack_channel_ids:
+      - C04JKN47B0X
+    owning_se: U092MLBGJ9F  # Dan Labrador
+
+  - slug: emerson-paints
+    display_name: Emerson Paints
+    email_domains: []
+    slack_channel_ids:
+      - C07MS15HJ49
+    owning_se: U07LSTM6J91  # Rensy Lomboy
+
+  - slug: funky-painting
+    display_name: Funky Painting
+    email_domains: []
+    slack_channel_ids:
+      - C08LQSA7BNK
+    owning_se: U09HQE6PL1G  # Celine Alinea
+
+  - slug: gopainting
+    display_name: GoPainting
+    email_domains: []
+    slack_channel_ids:
+      - C06DAR1C4M7
+    owning_se: U065NMJG8D8  # Eveguel
+
+  - slug: heiler-painting
+    display_name: Heiler Painting
+    email_domains: []
+    slack_channel_ids:
+      - C071PJXM92Q
+    owning_se: U092MLBGJ9F  # Dan Labrador
+
+  - slug: high-five-painting-formerly-519-painters
+    display_name: High Five Painting (formerly 519 Painters)
+    email_domains: []
+    slack_channel_ids:
+      - C0814JC2A1X
+    owning_se: U09HQE6PL1G  # Celine Alinea
+
+  - slug: highfill-painting
+    display_name: Highfill Painting
+    email_domains: []
+    slack_channel_ids:
+      - C080FM9HF6C
+    owning_se: U09HQE6PL1G  # Celine Alinea
+
+  - slug: integrity-painting
+    display_name: Integrity Painting
+    email_domains: []
+    slack_channel_ids:
+      - C07M0H0BHV1
+    owning_se: U07LSTM6J91  # Rensy Lomboy
+
+  - slug: kennedy-painting
+    display_name: Kennedy Painting
+    email_domains: []
+    slack_channel_ids:
+      - C04FGMZ7P5X
+    owning_se: U07LSTM6J91  # Rensy Lomboy
+
+  - slug: mclains-painting
+    display_name: McLain's Painting
+    email_domains: []
+    slack_channel_ids:
+      - C08L1DBBUMB
+    owning_se: U092MLBGJ9F  # Dan Labrador
+
+  - slug: mikes-quality-painting
+    display_name: Mike's Quality Painting
+    email_domains: []
+    slack_channel_ids:
+      - C04HKQUNCTT
+    owning_se: U07LSTM6J91  # Rensy Lomboy
+
+  - slug: paint-denver
+    display_name: Paint Denver
+    email_domains: []
+    slack_channel_ids:
+      - C07FKAMQ0CX
+    owning_se: U04CMHGF4GY  # Chris
+
+  - slug: paragon-painting-atlanta
+    display_name: Paragon Painting Atlanta
+    email_domains: []
+    slack_channel_ids:
+      - C096TFLGSDA
+    owning_se: U092MLBGJ9F  # Dan Labrador
+
+  - slug: pro-rise-painting
+    display_name: Pro Rise Painting
+    email_domains: []
+    slack_channel_ids:
+      - C06U7HXL7HA
+    owning_se: U092MLBGJ9F  # Dan Labrador
+
+  - slug: roll-call-painting
+    display_name: Roll Call Painting
+    email_domains: []
+    slack_channel_ids:
+      - C09EXHWAXS7
+    owning_se: U07LSTM6J91  # Rensy Lomboy
+
+  - slug: select-painting-and-coatings
+    display_name: Select Painting and Coatings
+    email_domains:
+      - select-kc.com
+    slack_channel_ids:
+      - C04UF22SP9A
+    # NOTE: SE assignment conflict in profile — Rensy Lomboy (profile.md history)
+    # vs Marcel (slack-signals.md 2026-04-13 after Aervinn reassignment).
+    # Leaving as Rensy until Cody confirms. Update owning_se when resolved.
+    owning_se: U07LSTM6J91  # Rensy Lomboy (provisional — confirm with Cody)
+
+  - slug: service-built
+    display_name: Service Built
+    email_domains: []
+    slack_channel_ids: []
+    # Channel PENDING_SBC — real ID not yet assigned; leave empty until confirmed
+    owning_se: U07LSTM6J91  # Rensy Lomboy
+
+  - slug: snl-painting
+    display_name: SNL Painting
+    email_domains: []
+    slack_channel_ids:
+      - C07V67TV3LN
+    owning_se: U04CMHGF4GY  # Chris
+
+  - slug: steve-holloway-painting
+    display_name: Steve Holloway Painting
+    email_domains: []
+    slack_channel_ids:
+      - C051H83DH34
+    owning_se: U092MLBGJ9F  # Dan Labrador
+
+# Boolean-internal Slack channels.
+# Messages in these channels produce NO ticket (spec §5.1, A10).
+# Only explicitly listed channels are silently treated as internal.
+# Any channel NOT listed here and NOT in a client entry falls into
+# the unknown-origin path (ticket created, unassigned, origin_class=unknown).
+internal_channel_ids:
+  - C085MRWJX7D  # #development-team / #dev-team (Boolean internal)
+  # Add other internal channels here as they are confirmed.
+  # Err on the side of inclusion — unregistered = unknown-origin ticket for triage.

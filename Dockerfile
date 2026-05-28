@@ -53,7 +53,10 @@ COPY --from=builder /app/packages/db/drizzle ./packages/db/drizzle
 # route client channel messages without a DB substrate (Stage 2).
 # REGISTRY_PATH=/app/registry.yaml is set as a Railway env var to point here.
 # See: packet §Ingestion Stage 1 + ADR §A1 / Rollback plan.
-COPY boolean-knowledge/clients/_registry.yaml ./registry.yaml
+# Source is packages/api/registry/_registry.yaml (inside build context).
+# Keep in sync with ~/boolean-knowledge/clients/_registry.yaml via:
+#   pnpm sync:registry   (run before commits that change the canonical file)
+COPY packages/api/registry/_registry.yaml ./registry.yaml
 
 EXPOSE 3000
 
