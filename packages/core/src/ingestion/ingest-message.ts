@@ -23,9 +23,9 @@
 //
 // plan §Slice 4 / CONTRACT.md
 
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, isNull, inArray } from "drizzle-orm";
 import type { Db } from "@dispatch/db";
-import { tickets, messages, accounts } from "@dispatch/db";
+import { tickets, messages, accounts, internalUsers } from "@dispatch/db";
 import type { IngestionEvent } from "./types.js";
 import { classifyOrigin } from "../registry/build-registry.js";
 import type { ParsedRegistry } from "../registry/build-registry.js";
@@ -141,8 +141,180 @@ export async function ingestMessage(
     return await createUnknownOriginTicket(db, event, sourceKind);
   }
 
+  // ── Internal-author policy (OQ-4 / ADR §A3) ──────────────────────────────────
+  //
+  // When a Boolean SE replies in a client channel, their message is classified
+  // as origin_class='client' (channel is a client channel). But the author is
+  // internal. INGESTION_INTERNAL_AUTHOR_POLICY controls routing:
+  //
+  //   route-complete (default) — create Ticket with status='complete', authorKind='se'
+  //   suppress                 — no Ticket created; return internal-channel kind
+  //   route-on-you             — create Ticket with status='new' (normal routing)
+  //
+  // This is an env-var-flippable policy branch (Cody calls OQ-4 at Phase 7).
+  if (resolvedAccountId) {
+    const internalAuthor = await isInternalAuthor(db, event.authorRef);
+    if (internalAuthor) {
+      const policy =
+        (process.env.INGESTION_INTERNAL_AUTHOR_POLICY ?? "route-complete") as
+          | "route-complete"
+          | "suppress"
+          | "route-on-you";
+
+      if (policy === "suppress") {
+        // Do not create a ticket for internal messages
+        return { kind: "internal-channel" };
+      }
+
+      if (policy === "route-on-you") {
+        // Route normally — internalAuthor flag is metadata only
+        return await createClientTicket(
+          db, event, resolvedAccountId, sourceKind, "client"
+        );
+      }
+
+      // Default: route-complete — SE reply in client channel → completed ticket
+      return await createInternalAuthorTicket(
+        db, event, resolvedAccountId, sourceKind
+      );
+    }
+  }
+
   // ── Client-origin ticket: INSERT ... ON CONFLICT DO NOTHING (P1-C) ───────────
-  return await createClientTicket(db, event, resolvedAccountId, sourceKind, originClass as "client");
+  return await createClientTicket(db, event, resolvedAccountId!, sourceKind, "client");
+}
+
+// ── Internal-author helpers ───────────────────────────────────────────────────
+
+/**
+ * Returns true if the given authorRef (Clerk user id OR Slack user id) is
+ * present in the internal_users table.
+ *
+ * The check matches on both clerk_id and slack_id so that messages arriving
+ * with Slack user ids (channel webhooks) are detected even before the SE has
+ * a Clerk session in the ingestion path.
+ */
+async function isInternalAuthor(db: Db, authorRef: string): Promise<boolean> {
+  if (!authorRef) return false;
+
+  // Try clerk_id match
+  const byClerk = await db
+    .select({ id: internalUsers.id })
+    .from(internalUsers)
+    .where(eq(internalUsers.clerkId, authorRef))
+    .limit(1);
+
+  if (byClerk.length > 0) return true;
+
+  // Try slack_id match (channel webhooks carry Slack user ids)
+  const bySlack = await db
+    .select({ id: internalUsers.id })
+    .from(internalUsers)
+    .where(eq(internalUsers.slackId, authorRef))
+    .limit(1);
+
+  return bySlack.length > 0;
+}
+
+/**
+ * Creates a ticket for an internal-author message in a client channel.
+ * Used when INGESTION_INTERNAL_AUTHOR_POLICY='route-complete'.
+ *
+ * The ticket is:
+ *   - origin_class='client' (the channel is a client channel)
+ *   - status='complete'     (SE message, not a new client inquiry)
+ *   - authorKind='se'       (the author is Boolean staff)
+ *   - assignee=event.authorRef (the SE who sent it)
+ *
+ * Idempotent on (source_channel_id, source_event_ts) per P1-C.
+ */
+async function createInternalAuthorTicket(
+  db: Db,
+  event: IngestionEvent,
+  resolvedAccountId: string,
+  sourceKind: "channel" | "dm" | "group-dm" | "email"
+): Promise<IngestResult> {
+  // Idempotency check
+  if (event.channelId && event.eventTs) {
+    const existing = await db
+      .select({ id: tickets.id })
+      .from(tickets)
+      .where(
+        and(
+          eq(tickets.sourceChannelId, event.channelId),
+          eq(tickets.sourceEventTs, event.eventTs)
+        )
+      )
+      .limit(1);
+
+    if (existing.length > 0) {
+      return { kind: "ticket-exists", ticketId: existing[0]!.id };
+    }
+  }
+
+  const undoToken = generateUndoToken();
+
+  const inserted = await db
+    .insert(tickets)
+    .values({
+      accountId: resolvedAccountId,
+      status: "complete",      // SE reply → immediately complete
+      type: "other",
+      sourceKind,
+      sourceChannelId: event.channelId,
+      sourceEventTs: event.eventTs,
+      originClass: "client",   // The channel is a client channel
+      assignee: event.authorRef, // The SE who sent it
+    })
+    .onConflictDoNothing()
+    .returning();
+
+  if (inserted.length === 0) {
+    const existing = await db
+      .select({ id: tickets.id })
+      .from(tickets)
+      .where(
+        and(
+          eq(tickets.sourceChannelId, event.channelId),
+          eq(tickets.sourceEventTs, event.eventTs)
+        )
+      )
+      .limit(1);
+    return { kind: "ticket-exists", ticketId: existing[0]!.id };
+  }
+
+  const ticket = inserted[0]!;
+
+  await db.insert(messages).values({
+    ticketId: ticket.id,
+    direction: "outbound",  // SE message going to client channel
+    authorKind: "se",
+    authorRef: event.authorRef,
+    body: event.body,
+    slackTs: event.eventTs,
+  });
+
+  await appendAudit(db, {
+    ticketId: ticket.id,
+    actorId: event.authorRef,
+    event: "ticket.created",
+    after: {
+      ticketId: ticket.id,
+      originClass: "client",
+      accountId: resolvedAccountId,
+      internalAuthor: true,
+      policy: "route-complete",
+    },
+    undoToken,
+  });
+
+  return {
+    kind: "ticket-created",
+    ticketId: ticket.id,
+    accountId: resolvedAccountId,
+    originClass: "client",
+    undoToken,
+  };
 }
 
 // ── DM / group-DM handling ────────────────────────────────────────────────────

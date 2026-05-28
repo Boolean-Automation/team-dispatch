@@ -72,7 +72,7 @@ export function Card({ ticket: t, focused = false, onFocus, onDismissed }: CardP
       </div>
       <div className="card-preview">{t.preview}</div>
       <div className="card-foot">
-        <Avatar engKey={t.assignee} />
+        <Avatar engKey={t.assignee} alt={t.clientName ?? "Contact avatar"} />
         <span className="age mono">{fmtAge(t.ageMin)}</span>
         {sla && (
           <span className={`sla mono ${cls}`}>

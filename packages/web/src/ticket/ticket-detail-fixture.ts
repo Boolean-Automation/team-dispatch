@@ -157,10 +157,15 @@ export const FIXTURE_ACTIVITY: ActivityItem[] = [
 ];
 
 // ── DEV-ONLY fixture highlights ───────────────────────────────────────────────
+// Shape matches the new HighlightsData contract: { content, sourcePath, editedAt } | null
 
-export const FIXTURE_HIGHLIGHTS =
-  "Pro Rise Painting · 18 mo client · $4.2k MRR, no plan to expand. " +
-  "Andre (owner, primary) handles ops; Diego handles finance and only contacts on QBO. " +
-  "Lives in HubSpot + PaintScout. Friday-demo cadence with their new GM — " +
-  "the recurring-revenue automation is the load-bearing metric in that demo. " +
-  "Past blockers: dependent-property mapping (Mar), invoice double-fire (Jan).";
+export const FIXTURE_HIGHLIGHTS = {
+  content:
+    "Pro Rise Painting · 18 mo client · $4.2k MRR, no plan to expand. " +
+    "Andre (owner, primary) handles ops; Diego handles finance and only contacts on QBO. " +
+    "Lives in HubSpot + PaintScout. Friday-demo cadence with their new GM — " +
+    "the recurring-revenue automation is the load-bearing metric in that demo. " +
+    "Past blockers: dependent-property mapping (Mar), invoice double-fire (Jan).",
+  sourcePath: "clients/prorise/profile.md",
+  editedAt: "4d ago",
+};

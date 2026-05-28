@@ -14,6 +14,17 @@ import { ACCOUNTS, HEALTH_LABEL } from "../lib/seed";
 import type { Ticket, TicketStatus } from "../lib/types";
 import { apiClient } from "../lib/api-client";
 import { useUndoableMutation } from "../lib/use-undoable-mutation.js";
+import { useTickets } from "../lib/queries.js";
+
+// Non-closed statuses for open ticket count
+const OPEN_STATUSES = new Set<TicketStatus>([
+  "new",
+  "on-you",
+  "waiting-client",
+  "follow-up-required",
+  "follow-up-1-sent",
+  "closeout",
+]);
 
 interface ReinforcementDto {
   ticketId: string;
@@ -173,6 +184,20 @@ export function PanelInfo({ ticket, assigneeName }: PanelInfoProps) {
   const typeClass = TYPE_TAG_CLASS[ticket.type] ?? "other";
   const displayAssigneeName = assigneeName ?? ticket.assignee ?? "Unassigned";
 
+  // ── Open tickets count (AC-8) ─────────────────────────────────────────────
+  // Derive from TanStack cache for the account — client-side, no extra request.
+  // Inherits the board's refetchInterval: 25_000 via useTickets.
+  const { data: allAccountTickets = [] } = useTickets({
+    accountId: ticket.accountId,
+  });
+  const openTicketCount = allAccountTickets.filter(
+    (t) => OPEN_STATUSES.has(t.status)
+  ).length;
+  const openTicketsLabel =
+    openTicketCount === 1
+      ? "1 open ticket"
+      : `${openTicketCount} open tickets`;
+
   // Fetch reinforcement collaborators
   const { data: reinforcements = [] } = useQuery<ReinforcementDto[]>({
     queryKey: ["reinforcements", ticket.id],
@@ -295,6 +320,13 @@ export function PanelInfo({ ticket, assigneeName }: PanelInfoProps) {
       <div className="rp-section">
         <div className="head">
           <span>{clientName}</span>
+        </div>
+        {/* Open tickets count (AC-8) — client-side from TanStack cache */}
+        <div
+          className="rp-row"
+          style={{ fontFamily: "var(--font-mono)", fontSize: 11.5, color: "var(--text-3)" }}
+        >
+          <span style={{ gridColumn: "1 / -1" }}>{openTicketsLabel}</span>
         </div>
         <div className="fact">
           <span className="fk">Health</span>

@@ -12,7 +12,8 @@
     "typecheck": "pnpm --filter @dispatch/db typecheck && pnpm --filter @dispatch/core typecheck && pnpm --filter @dispatch/web typecheck && pnpm --filter @dispatch/api typecheck && pnpm --filter @dispatch/mcp typecheck && pnpm --filter @dispatch/companion typecheck",
     "lint": "eslint .",
     "test": "pnpm -r test",
-    "e2e": "playwright test"
+    "e2e": "playwright test",
+    "sync:registry": "cp ~/boolean-knowledge/clients/_registry.yaml packages/api/registry/_registry.yaml"
   },
   "devDependencies": {
     "@playwright/test": "^1.45.0",
