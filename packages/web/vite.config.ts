@@ -9,7 +9,8 @@ const API_PROXY_TARGET =
 export default defineConfig({
   plugins: [react()],
   server: {
-    port: 5173,
+    port: 5174,
+    strictPort: true,
     proxy: {
       "/api": {
         target: API_PROXY_TARGET,

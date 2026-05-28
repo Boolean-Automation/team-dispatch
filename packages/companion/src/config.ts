@@ -54,6 +54,8 @@ const DEFAULT_PORT = 7720;
 const DEFAULT_ALLOWED_ORIGINS = [
   "http://localhost:5173",
   "https://localhost:5173",
+  "http://localhost:5174",
+  "https://localhost:5174",
   "https://dispatch.paintos.app",
 ];
 

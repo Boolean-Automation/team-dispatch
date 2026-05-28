@@ -6,7 +6,7 @@
 // See e2e/README.md for details.
 //
 // webServer setup:
-//   - Vite dev server (port 5173) — always started.
+//   - Vite dev server (port 5174) — always started.
 //   - API server (port 3000) — started for board tests that need live data.
 //     DATABASE_URL is always pointed at dispatch_dev (never dispatch_test).
 
@@ -17,7 +17,7 @@ import { fileURLToPath } from "url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const WEB_PORT = 5173;
+const WEB_PORT = 5174;
 const API_PORT = 3000;
 
 export default defineConfig({
