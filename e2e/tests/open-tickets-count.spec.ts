@@ -22,14 +22,10 @@ import { test, expect } from "@playwright/test";
 const FIXTURE_DISPLAY_ID = "DSP-2876";
 
 test.describe("AC-8 — Open tickets count in right rail", () => {
-  test.beforeEach(async ({ page }) => {
+  test("open tickets count row is present in the right panel client section", async ({ page }) => {
     await page.goto(`/t/${FIXTURE_DISPLAY_ID}`);
     await expect(page.locator(".tlist")).toBeVisible({ timeout: 20_000 });
-    // Wait for the right panel to load
     await expect(page.locator(".rpanel")).toBeVisible();
-  });
-
-  test("open tickets count row is present in the right panel client section", async ({ page }) => {
     // PanelInfo renders: <span style={{gridColumn: "1 / -1"}}>{openTicketsLabel}</span>
     // The row is in the Client facts section under the account name.
     const rpanel = page.locator(".rpanel");
@@ -41,8 +37,11 @@ test.describe("AC-8 — Open tickets count in right rail", () => {
   });
 
   test("open tickets label is singular-aware ('1 open ticket' not '1 open tickets')", async ({ page }) => {
-    // Test the singular form by evaluating the label logic
+    // Pure logic test — no navigation needed.
     // PanelInfo: openTicketCount === 1 ? "1 open ticket" : `${openTicketCount} open tickets`
+    await page.goto("/");
+    await expect(page.locator("body")).toBeVisible({ timeout: 5_000 });
+
     const labelFor1 = await page.evaluate(() => {
       const count = 1;
       return count === 1 ? "1 open ticket" : `${count} open tickets`;
@@ -63,6 +62,9 @@ test.describe("AC-8 — Open tickets count in right rail", () => {
   });
 
   test("open tickets count label is rendered in the client section (not ticket section)", async ({ page }) => {
+    await page.goto(`/t/${FIXTURE_DISPLAY_ID}`);
+    await expect(page.locator(".tlist")).toBeVisible({ timeout: 20_000 });
+
     // PanelInfo renders the open-tickets count in the Client facts section
     // (the section that starts with the client display name).
     // It should appear AFTER the Ticket section (Status, Assignee, SLA) rows.
