@@ -105,12 +105,23 @@ export function normalizeSlackPayload(
     return { kind: "ignored", reason: "bot message" };
   }
 
-  // Skip message_changed / message_deleted subtypes
+  // Subtype policy: most subtypes (message_changed, message_deleted, channel_join,
+  // etc.) are noise and must be ignored. But some subtypes carry a real,
+  // first-class client message and MUST be ingested like a plain message:
+  //   - thread_broadcast: a thread reply also posted to the channel
+  //   - file_share:       a normal message that happens to include a file upload.
+  //                       Clients attach screenshots precisely when something is
+  //                       visibly wrong (e.g. "here are 3 duplicate change orders"
+  //                       + image.png). These carry user/text/ts/thread_ts just
+  //                       like a plain message. Dropping them silently buried a
+  //                       live AA Painting commission fire — the message AND its
+  //                       whole downstream thread (orphan-replies) vanished.
   const subtype = event["subtype"];
-  if (subtype && subtype !== "thread_broadcast") {
+  const ALLOWED_SUBTYPES = new Set(["thread_broadcast", "file_share"]);
+  if (typeof subtype === "string" && !ALLOWED_SUBTYPES.has(subtype)) {
     return {
       kind: "ignored",
-      reason: `message subtype: ${String(subtype)}`,
+      reason: `message subtype: ${subtype}`,
     };
   }
 
