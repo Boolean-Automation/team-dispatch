@@ -9,6 +9,7 @@ import { fmtAge, fmtSla, slaClass } from "../shell/format.js";
 import { HEALTH_LABEL } from "../lib/seed.js";
 import type { Ticket } from "../lib/types.js";
 import { useUndoableMutation } from "../lib/use-undoable-mutation.js";
+import { apiClient } from "../lib/api-client.js";
 
 interface TagProps {
   type: Ticket["type"];
@@ -30,14 +31,11 @@ export function Card({ ticket: t, focused = false, onFocus, onDismissed }: CardP
   const cls = slaClass(t);
 
   const dismissMutation = useUndoableMutation<{ ok: boolean; undoToken: string }, string>({
-    mutationFn: async (ticketId: string) => {
-      const res = await fetch(`/api/tickets/${ticketId}/dismiss`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-      });
-      if (!res.ok) throw new Error(`Dismiss failed: ${res.status}`);
-      return res.json() as Promise<{ ok: boolean; undoToken: string }>;
-    },
+    mutationFn: (ticketId: string) =>
+      apiClient.post<{ ok: boolean; undoToken: string }>(
+        `/api/tickets/${ticketId}/dismiss`,
+        {}
+      ),
     toastLabel: "Ticket dismissed",
     invalidateKeys: [["tickets"]],
     onSuccess: (_data, ticketId) => {
@@ -51,6 +49,24 @@ export function Card({ ticket: t, focused = false, onFocus, onDismissed }: CardP
     dismissMutation.mutate(t.id);
   };
 
+  const reopenMutation = useUndoableMutation<{ ok: boolean; undoToken: string }, string>({
+    mutationFn: (ticketId: string) =>
+      apiClient.patch<{ ok: boolean; undoToken: string }>(
+        `/api/tickets/${ticketId}/status`,
+        { status: "on-you" }
+      ),
+    toastLabel: "Ticket reopened",
+    invalidateKeys: [["tickets"]],
+  });
+
+  const handleReopen = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    reopenMutation.mutate(t.id);
+  };
+
+  const isClosed = t.status === "closed";
+
   return (
     <Link
       className={`card ${focused ? "focused" : ""}`}
@@ -60,15 +76,37 @@ export function Card({ ticket: t, focused = false, onFocus, onDismissed }: CardP
       <div className="card-head">
         <div className="card-client">{t.clientName}</div>
         <div className="card-id mono">{t.displayId}</div>
-        <button
-          className="card-dismiss"
-          title="Dismiss ticket"
-          onClick={handleDismiss}
-          aria-label="Dismiss ticket"
-          style={{ marginLeft: "auto", opacity: 0.4, background: "none", border: "none", cursor: "pointer" }}
-        >
-          ×
-        </button>
+        {isClosed ? (
+          <button
+            className="card-reopen"
+            title="Reopen ticket"
+            onClick={handleReopen}
+            aria-label="Reopen ticket"
+            disabled={reopenMutation.isPending}
+            style={{
+              marginLeft: "auto",
+              fontSize: 11,
+              background: "none",
+              border: "1px solid var(--line, #3a3a3a)",
+              borderRadius: 4,
+              padding: "1px 6px",
+              cursor: "pointer",
+              color: "inherit",
+            }}
+          >
+            Reopen
+          </button>
+        ) : (
+          <button
+            className="card-dismiss"
+            title="Dismiss ticket"
+            onClick={handleDismiss}
+            aria-label="Dismiss ticket"
+            style={{ marginLeft: "auto", opacity: 0.4, background: "none", border: "none", cursor: "pointer" }}
+          >
+            ×
+          </button>
+        )}
       </div>
       <div className="card-preview">{t.preview}</div>
       <div className="card-foot">

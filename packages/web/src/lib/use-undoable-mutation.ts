@@ -45,19 +45,6 @@ export function fireInfoToast(message: string): void {
   }
 }
 
-// ── Undo API call ─────────────────────────────────────────────────────────────
-
-async function postUndo(token: string): Promise<void> {
-  const res = await fetch("/api/undo", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ token }),
-  });
-  if (!res.ok) {
-    throw new Error(`Undo failed: ${res.status}`);
-  }
-}
-
 // ── useUndoableMutation ───────────────────────────────────────────────────────
 
 export interface UndoableMutationOptions<TData, TVariables> {

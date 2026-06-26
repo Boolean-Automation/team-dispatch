@@ -25,6 +25,7 @@ import {
   dismissTicket,
   updateTicketStatus,
   setEffortBucket,
+  isKnownEngineer,
 } from "@dispatch/core";
 
 interface TicketByIdRoute extends RouteGenericInterface {
@@ -39,6 +40,8 @@ interface CreateTicketBody {
   accountId: string;
   type?: "question" | "reply" | "thanks" | "ooo" | "other";
   body?: string;
+  /** Admin-only: Clerk id of the SE to assign. Ignored for SE callers. */
+  assigneeId?: string;
 }
 
 interface PatchEffortBucketBody {
@@ -128,12 +131,42 @@ export default async function ticketRoutes(
         });
       }
 
+      // Role-aware assignment (ADR-005 follow-up):
+      //   SE caller    → always self-assign; an SE cannot route to anyone else.
+      //   Admin caller → may pick any known engineer; omit to fall back to the
+      //                  account's owning SE (createTicketManual default).
+      let assigneeId: string | undefined;
+      if (request.auth.role === "se") {
+        assigneeId = request.auth.userId;
+      } else if (body.assigneeId !== undefined) {
+        // Admin supplied an assignee key. Only an ABSENT field defaults to the
+        // owning SE; any present value (incl. null/non-string) must be a valid
+        // known-engineer string, else 400 — never a silent fall-through.
+        if (typeof body.assigneeId !== "string" || !body.assigneeId.trim()) {
+          return reply.status(400).send({
+            error: "Bad Request",
+            message: "assigneeId must be a non-empty string",
+            statusCode: 400,
+          });
+        }
+        // Validate against the registry so a stale/bad id can't mis-route.
+        if (!(await isKnownEngineer(fastify.db, body.assigneeId))) {
+          return reply.status(400).send({
+            error: "Bad Request",
+            message: "assigneeId is not a known engineer",
+            statusCode: 400,
+          });
+        }
+        assigneeId = body.assigneeId;
+      }
+
       const result = await createTicketManual({
         db: fastify.db,
         accountId: body.accountId,
         type: body.type,
         body: body.body,
         actorId: request.auth.userId,
+        assigneeId,
       });
 
       return reply.status(201).send(result);

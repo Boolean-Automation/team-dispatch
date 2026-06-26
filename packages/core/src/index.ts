@@ -16,6 +16,7 @@ export * from "./services/audit-service.js";
 export * from "./services/contact-discovery.js";
 export * from "./services/contact-service.js";
 export * from "./services/effort-service.js";
+export * from "./services/engineer-service.js";
 export * from "./services/internal-thread-service.js";
 export * from "./services/message-service.js";
 export * from "./services/notification-service.js";

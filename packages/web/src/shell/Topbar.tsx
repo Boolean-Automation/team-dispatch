@@ -7,6 +7,16 @@ import Ic from "./Ic.js";
 import { NotificationBell } from "./NotificationBell.js";
 import type { BoardFilters, SortMode } from "../lib/types.js";
 import { ACCOUNTS, ENGINEERS } from "../lib/seed.js";
+import { useMe, useEngineers, useAccounts } from "../lib/queries.js";
+import {
+  useUndoableMutation,
+  fireInfoToast,
+} from "../lib/use-undoable-mutation.js";
+import {
+  registerNewTicketHandler,
+  unregisterNewTicketHandler,
+} from "../lib/new-ticket-bus.js";
+import { apiClient } from "../lib/api-client.js";
 
 // ── FilterChip ────────────────────────────────────────────────────────────────
 
@@ -159,28 +169,58 @@ function SortChip({ value, onChange }: SortChipProps) {
 // Opens a minimal inline dialog to create a hand-crafted ticket.
 // Slice 4: fires POST /api/tickets + shows an undo toast.
 
+interface CreateTicketVars {
+  accountId: string;
+  assigneeId?: string;
+}
+
 function NewTicketButton() {
   const [open, setOpen] = useState(false);
   const [accountId, setAccountId] = useState("");
-  const [submitting, setSubmitting] = useState(false);
+  const [assigneeId, setAssigneeId] = useState(""); // "" = owning-SE default
 
-  const handleSubmit = async () => {
-    if (!accountId.trim()) return;
-    setSubmitting(true);
-    try {
-      const res = await fetch("/api/tickets", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ accountId }),
-      });
-      if (res.ok) {
+  const me = useMe();
+  const isAdmin = me.data?.role === "admin";
+  const accounts = useAccounts();
+  const engineers = useEngineers();
+
+  // Let other surfaces (the per-column "+") open this popover.
+  useEffect(() => {
+    const handler = () => setOpen(true);
+    registerNewTicketHandler(handler);
+    return () => unregisterNewTicketHandler(handler);
+  }, []);
+
+  const createMutation = useUndoableMutation<
+    { ticketId: string; undoToken: string },
+    CreateTicketVars
+  >({
+    mutationFn: (vars: CreateTicketVars) =>
+      apiClient.post<{ ticketId: string; undoToken: string }>(
+        "/api/tickets",
+        vars
+      ),
+    toastLabel: "Ticket created",
+    invalidateKeys: [["tickets"]],
+  });
+
+  const handleSubmit = () => {
+    if (!accountId) return;
+    const vars: CreateTicketVars = { accountId };
+    if (isAdmin && assigneeId) vars.assigneeId = assigneeId;
+    createMutation.mutate(vars, {
+      onSuccess: () => {
         setOpen(false);
         setAccountId("");
-      }
-    } finally {
-      setSubmitting(false);
-    }
+        setAssigneeId("");
+      },
+      onError: (e: Error) => {
+        fireInfoToast(e.message || "Could not create the ticket");
+      },
+    });
   };
+
+  const accountOpts = accounts.data ?? [];
 
   return (
     <div style={{ position: "relative" }}>
@@ -188,26 +228,47 @@ function NewTicketButton() {
         <Ic.plus /> New ticket
       </button>
       {open && (
-        <div className="pop" style={{ right: 0, width: 260, padding: "12px" }}>
+        <div className="pop" style={{ right: 0, width: 280, padding: "12px" }}>
           <div style={{ marginBottom: 8, fontWeight: 600 }}>New ticket</div>
-          <input
+          <select
             className="pop-input"
-            placeholder="Account ID or slug"
             value={accountId}
             onChange={(e) => setAccountId(e.target.value)}
             style={{ width: "100%", marginBottom: 8 }}
             autoFocus
-          />
+          >
+            <option value="">Select account…</option>
+            {accountOpts.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.displayName}
+              </option>
+            ))}
+          </select>
+          {isAdmin && (
+            <select
+              className="pop-input"
+              value={assigneeId}
+              onChange={(e) => setAssigneeId(e.target.value)}
+              style={{ width: "100%", marginBottom: 8 }}
+            >
+              <option value="">Owning SE (default)</option>
+              {(engineers.data ?? []).map((eng) => (
+                <option key={eng.clerkId} value={eng.clerkId}>
+                  {eng.label}
+                </option>
+              ))}
+            </select>
+          )}
           <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
             <button className="btn-ghost" onClick={() => setOpen(false)}>
               Cancel
             </button>
             <button
               className="btn-primary"
-              onClick={() => void handleSubmit()}
-              disabled={submitting || !accountId.trim()}
+              onClick={handleSubmit}
+              disabled={createMutation.isPending || !accountId}
             >
-              {submitting ? "Creating…" : "Create"}
+              {createMutation.isPending ? "Creating…" : "Create"}
             </button>
           </div>
         </div>

@@ -5,6 +5,7 @@ import React from "react";
 import Ic from "../shell/Ic";
 import { Card } from "./Card";
 import type { Ticket } from "../lib/types";
+import { openNewTicket } from "../lib/new-ticket-bus";
 
 interface ColumnStatus {
   key: string;
@@ -25,7 +26,12 @@ export function Column({ status, tickets, focusedId, onFocus }: ColumnProps) {
         <span className="name">{status.name}</span>
         <span className="count mono">{tickets.length}</span>
         <span className="spacer" />
-        <button className="head-act" title="Add ticket">
+        <button
+          className="head-act"
+          title="Add ticket"
+          aria-label="Add ticket"
+          onClick={() => openNewTicket()}
+        >
           <Ic.plus />
         </button>
         <button className="head-act" title="More">

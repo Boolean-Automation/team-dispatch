@@ -103,3 +103,34 @@ export function useTicketActivity(ticketId: string) {
     staleTime: 15_000,
   });
 }
+
+// ── identity / engineers ───────────────────────────────────────────────────────
+
+export interface MeResponse {
+  userId: string;
+  role: "admin" | "se";
+}
+
+/** The signed-in user's identity + role. Drives hand-create assignment UI. */
+export function useMe() {
+  return useQuery<MeResponse>({
+    queryKey: ["me"],
+    queryFn: () => apiClient.get<MeResponse>("/api/me"),
+    staleTime: 300_000,
+  });
+}
+
+export interface EngineerSummary {
+  clerkId: string;
+  label: string;
+  slackId: string | null;
+}
+
+/** Engineer registry (internal_users). Powers the admin assignee picker. */
+export function useEngineers() {
+  return useQuery<EngineerSummary[]>({
+    queryKey: ["engineers"],
+    queryFn: () => apiClient.get<EngineerSummary[]>("/api/engineers"),
+    staleTime: 300_000,
+  });
+}

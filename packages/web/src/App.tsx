@@ -7,6 +7,7 @@ import { BrowserRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { AppRoutes } from "./routes";
 import { RequireAuth } from "./lib/clerk";
+import { UndoToast } from "./shell/UndoToast";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -24,6 +25,9 @@ export function App() {
       <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <RequireAuth>
           <AppRoutes />
+          {/* Renders undo + info toasts fired through the toast bus. Must live
+              inside RequireAuth so the Clerk token provider is set for undo. */}
+          <UndoToast />
         </RequireAuth>
       </BrowserRouter>
     </QueryClientProvider>
