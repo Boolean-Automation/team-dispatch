@@ -142,6 +142,15 @@ describe("POST /api/tickets — role-aware assignment", () => {
     expect(res.status).toBe(400);
   });
 
+  it("admin caller with a present-but-malformed assignee (null) gets 400", async () => {
+    const res = await request(fastify.server)
+      .post("/api/tickets")
+      .set("Authorization", "Bearer admin-token")
+      .send({ accountId: testAccountId, assigneeId: null });
+
+    expect(res.status).toBe(400);
+  });
+
   it("admin caller without an assignee falls back to the owning SE", async () => {
     const res = await request(fastify.server)
       .post("/api/tickets")

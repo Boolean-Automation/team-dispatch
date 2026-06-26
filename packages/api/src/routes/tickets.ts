@@ -138,9 +138,10 @@ export default async function ticketRoutes(
       let assigneeId: string | undefined;
       if (request.auth.role === "se") {
         assigneeId = request.auth.userId;
-      } else if (body.assigneeId !== undefined && body.assigneeId !== null) {
-        // Admin supplied an assignee. A present-but-malformed value is a 400,
-        // not a silent fall-through to owning-SE routing.
+      } else if (body.assigneeId !== undefined) {
+        // Admin supplied an assignee key. Only an ABSENT field defaults to the
+        // owning SE; any present value (incl. null/non-string) must be a valid
+        // known-engineer string, else 400 — never a silent fall-through.
         if (typeof body.assigneeId !== "string" || !body.assigneeId.trim()) {
           return reply.status(400).send({
             error: "Bad Request",
