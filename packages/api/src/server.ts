@@ -23,6 +23,7 @@ import clerkAuthPlugin from "./plugins/clerk-auth.js";
 import dbPlugin from "./plugins/db.js";
 import meRoutes from "./routes/me.js";
 import ticketRoutes from "./routes/tickets.js";
+import engineerRoutes from "./routes/engineers.js";
 import accountRoutes from "./routes/accounts.js";
 import contactRoutes from "./routes/contacts.js";
 import ingestionRoutes from "./routes/ingestion.js";
@@ -73,6 +74,7 @@ export async function buildServer(opts: BuildServerOptions = {}) {
   // ── Routes ────────────────────────────────────────────────────────────────────
   await fastify.register(meRoutes);
   await fastify.register(ticketRoutes);
+  await fastify.register(engineerRoutes);
   await fastify.register(accountRoutes);
   await fastify.register(contactRoutes);
   // Slice 4 routes

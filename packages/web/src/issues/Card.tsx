@@ -51,6 +51,28 @@ export function Card({ ticket: t, focused = false, onFocus, onDismissed }: CardP
     dismissMutation.mutate(t.id);
   };
 
+  const reopenMutation = useUndoableMutation<{ ok: boolean; undoToken: string }, string>({
+    mutationFn: async (ticketId: string) => {
+      const res = await fetch(`/api/tickets/${ticketId}/status`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "on-you" }),
+      });
+      if (!res.ok) throw new Error(`Reopen failed: ${res.status}`);
+      return res.json() as Promise<{ ok: boolean; undoToken: string }>;
+    },
+    toastLabel: "Ticket reopened",
+    invalidateKeys: [["tickets"]],
+  });
+
+  const handleReopen = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    reopenMutation.mutate(t.id);
+  };
+
+  const isClosed = t.status === "closed";
+
   return (
     <Link
       className={`card ${focused ? "focused" : ""}`}
@@ -60,15 +82,37 @@ export function Card({ ticket: t, focused = false, onFocus, onDismissed }: CardP
       <div className="card-head">
         <div className="card-client">{t.clientName}</div>
         <div className="card-id mono">{t.displayId}</div>
-        <button
-          className="card-dismiss"
-          title="Dismiss ticket"
-          onClick={handleDismiss}
-          aria-label="Dismiss ticket"
-          style={{ marginLeft: "auto", opacity: 0.4, background: "none", border: "none", cursor: "pointer" }}
-        >
-          ×
-        </button>
+        {isClosed ? (
+          <button
+            className="card-reopen"
+            title="Reopen ticket"
+            onClick={handleReopen}
+            aria-label="Reopen ticket"
+            disabled={reopenMutation.isPending}
+            style={{
+              marginLeft: "auto",
+              fontSize: 11,
+              background: "none",
+              border: "1px solid var(--line, #3a3a3a)",
+              borderRadius: 4,
+              padding: "1px 6px",
+              cursor: "pointer",
+              color: "inherit",
+            }}
+          >
+            Reopen
+          </button>
+        ) : (
+          <button
+            className="card-dismiss"
+            title="Dismiss ticket"
+            onClick={handleDismiss}
+            aria-label="Dismiss ticket"
+            style={{ marginLeft: "auto", opacity: 0.4, background: "none", border: "none", cursor: "pointer" }}
+          >
+            ×
+          </button>
+        )}
       </div>
       <div className="card-preview">{t.preview}</div>
       <div className="card-foot">

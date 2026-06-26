@@ -727,6 +727,14 @@ export interface CreateTicketManualOptions {
   type?: "question" | "reply" | "thanks" | "ooo" | "other";
   body?: string;
   actorId?: string;
+  /**
+   * Clerk user id to assign the ticket to directly, bypassing owning-SE routing.
+   * Used by the hand-create flow: SEs self-assign (assigneeId = their own id);
+   * admins may pick any engineer. When omitted, the ticket routes to the
+   * account's owning SE (default behavior). The API layer validates that the
+   * id belongs to a known internal user before passing it here.
+   */
+  assigneeId?: string;
 }
 
 export type CreateTicketManualResult = {
@@ -737,7 +745,7 @@ export type CreateTicketManualResult = {
 export async function createTicketManual(
   opts: CreateTicketManualOptions
 ): Promise<CreateTicketManualResult> {
-  const { db, accountId, type = "question", body, actorId } = opts;
+  const { db, accountId, type = "question", body, actorId, assigneeId } = opts;
 
   const undoToken = generateUndoToken();
 
@@ -765,8 +773,20 @@ export async function createTicketManual(
     });
   }
 
-  // Route to owning SE
-  const { assignee, status } = await routeTicket(db, ticket.id, accountId);
+  // Assign directly when an explicit assignee is given (SE self-assign or
+  // admin pick); otherwise route to the account's owning SE.
+  let assignee: string | null;
+  let status: string;
+  if (assigneeId) {
+    await db
+      .update(tickets)
+      .set({ assignee: assigneeId, status: "on-you", updatedAt: new Date() })
+      .where(eq(tickets.id, ticket.id));
+    assignee = assigneeId;
+    status = "on-you";
+  } else {
+    ({ assignee, status } = await routeTicket(db, ticket.id, accountId));
+  }
 
   await appendAudit(db, {
     ticketId: ticket.id,
