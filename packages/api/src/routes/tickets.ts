@@ -138,9 +138,17 @@ export default async function ticketRoutes(
       let assigneeId: string | undefined;
       if (request.auth.role === "se") {
         assigneeId = request.auth.userId;
-      } else if (typeof body.assigneeId === "string" && body.assigneeId) {
-        // Validate the chosen id against the registry so a stale/bad value
-        // can't silently mis-route the ticket.
+      } else if (body.assigneeId !== undefined && body.assigneeId !== null) {
+        // Admin supplied an assignee. A present-but-malformed value is a 400,
+        // not a silent fall-through to owning-SE routing.
+        if (typeof body.assigneeId !== "string" || !body.assigneeId.trim()) {
+          return reply.status(400).send({
+            error: "Bad Request",
+            message: "assigneeId must be a non-empty string",
+            statusCode: 400,
+          });
+        }
+        // Validate against the registry so a stale/bad id can't mis-route.
         if (!(await isKnownEngineer(fastify.db, body.assigneeId))) {
           return reply.status(400).send({
             error: "Bad Request",

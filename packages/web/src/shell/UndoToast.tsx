@@ -10,6 +10,7 @@ import {
   registerUndoToastHandler,
   registerInfoToastHandler,
 } from "../lib/use-undoable-mutation.js";
+import { apiClient } from "../lib/api-client.js";
 
 interface ToastItem {
   id: string;
@@ -27,13 +28,10 @@ interface UndoToastProps {
 }
 
 async function postUndo(token: string): Promise<void> {
-  const res = await fetch("/api/undo", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ token }),
-  });
-  if (!res.ok) {
-    console.error(`Undo failed: ${res.status}`);
+  try {
+    await apiClient.post("/api/undo", { token });
+  } catch (e) {
+    console.error("Undo failed:", e);
   }
 }
 

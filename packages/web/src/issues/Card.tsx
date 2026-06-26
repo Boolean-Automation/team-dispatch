@@ -9,6 +9,7 @@ import { fmtAge, fmtSla, slaClass } from "../shell/format.js";
 import { HEALTH_LABEL } from "../lib/seed.js";
 import type { Ticket } from "../lib/types.js";
 import { useUndoableMutation } from "../lib/use-undoable-mutation.js";
+import { apiClient } from "../lib/api-client.js";
 
 interface TagProps {
   type: Ticket["type"];
@@ -30,14 +31,11 @@ export function Card({ ticket: t, focused = false, onFocus, onDismissed }: CardP
   const cls = slaClass(t);
 
   const dismissMutation = useUndoableMutation<{ ok: boolean; undoToken: string }, string>({
-    mutationFn: async (ticketId: string) => {
-      const res = await fetch(`/api/tickets/${ticketId}/dismiss`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-      });
-      if (!res.ok) throw new Error(`Dismiss failed: ${res.status}`);
-      return res.json() as Promise<{ ok: boolean; undoToken: string }>;
-    },
+    mutationFn: (ticketId: string) =>
+      apiClient.post<{ ok: boolean; undoToken: string }>(
+        `/api/tickets/${ticketId}/dismiss`,
+        {}
+      ),
     toastLabel: "Ticket dismissed",
     invalidateKeys: [["tickets"]],
     onSuccess: (_data, ticketId) => {
@@ -52,15 +50,11 @@ export function Card({ ticket: t, focused = false, onFocus, onDismissed }: CardP
   };
 
   const reopenMutation = useUndoableMutation<{ ok: boolean; undoToken: string }, string>({
-    mutationFn: async (ticketId: string) => {
-      const res = await fetch(`/api/tickets/${ticketId}/status`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: "on-you" }),
-      });
-      if (!res.ok) throw new Error(`Reopen failed: ${res.status}`);
-      return res.json() as Promise<{ ok: boolean; undoToken: string }>;
-    },
+    mutationFn: (ticketId: string) =>
+      apiClient.patch<{ ok: boolean; undoToken: string }>(
+        `/api/tickets/${ticketId}/status`,
+        { status: "on-you" }
+      ),
     toastLabel: "Ticket reopened",
     invalidateKeys: [["tickets"]],
   });

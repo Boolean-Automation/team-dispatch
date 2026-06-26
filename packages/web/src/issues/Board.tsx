@@ -15,6 +15,9 @@ export const STATUSES = [
   { key: "follow-up-required", name: "Follow-up Required" },
   { key: "follow-up-1-sent", name: "Follow-up 1 Sent" },
   { key: "closeout", name: "Closeout Follow-up Required" },
+  // Closed lives on the board so closed tickets are findable and can be
+  // reopened inline (Card renders a Reopen action for status === "closed").
+  { key: "closed", name: "Closed" },
 ] as const;
 
 interface BoardProps {

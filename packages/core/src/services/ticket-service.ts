@@ -237,9 +237,18 @@ export async function updateTicketStatus(
 
   const undoToken = generateUndoToken();
 
-  // Stamp resolved_at when closing or completing
-  const resolvedAt =
-    targetStatus === "closed" || targetStatus === "complete" ? new Date() : undefined;
+  // Stamp resolved_at when closing/completing; CLEAR it when reopening a
+  // closed/complete ticket back to an open status (else a reopened ticket
+  // stays marked resolved). Tri-state, mirroring waitingClientSinceAt below:
+  //   Date      — entering closed/complete
+  //   null      — leaving closed/complete (reopen)
+  //   undefined — no change
+  let resolvedAt: Date | null | undefined;
+  if (targetStatus === "closed" || targetStatus === "complete") {
+    resolvedAt = new Date();
+  } else if (ticket.status === "closed" || ticket.status === "complete") {
+    resolvedAt = null;
+  }
 
   // P2-H: stamp follow_up_1_sent_at when manually entering follow-up-1-sent
   // (only if not already set — avoids overwriting an earlier stamp)
@@ -268,7 +277,7 @@ export async function updateTicketStatus(
     .set({
       status: targetStatus,
       updatedAt: new Date(),
-      ...(resolvedAt ? { resolvedAt } : {}),
+      ...(resolvedAt !== undefined ? { resolvedAt } : {}),
       ...(followUp1SentAt ? { followUp1SentAt } : {}),
       ...(waitingClientSinceAt !== undefined ? { waitingClientSinceAt } : {}),
     })
@@ -292,7 +301,12 @@ export async function updateTicketStatus(
         ? waitingClientSinceAt.toISOString()
         : (waitingClientSinceAt === null ? null : undefined),
       followUp1SentAt: followUp1SentAt?.toISOString() ?? null,
-      resolvedAt: resolvedAt?.toISOString() ?? null,
+      resolvedAt:
+        resolvedAt instanceof Date
+          ? resolvedAt.toISOString()
+          : resolvedAt === null
+            ? null
+            : undefined,
     },
     undoToken,
   });

@@ -16,6 +16,7 @@ import {
   registerNewTicketHandler,
   unregisterNewTicketHandler,
 } from "../lib/new-ticket-bus.js";
+import { apiClient } from "../lib/api-client.js";
 
 // ── FilterChip ────────────────────────────────────────────────────────────────
 
@@ -194,24 +195,11 @@ function NewTicketButton() {
     { ticketId: string; undoToken: string },
     CreateTicketVars
   >({
-    mutationFn: async (vars: CreateTicketVars) => {
-      const res = await fetch("/api/tickets", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(vars),
-      });
-      if (!res.ok) {
-        let message = `Create failed (${res.status})`;
-        try {
-          const err = (await res.json()) as { message?: string };
-          if (err?.message) message = err.message;
-        } catch {
-          /* non-JSON error body — keep the status message */
-        }
-        throw new Error(message);
-      }
-      return res.json() as Promise<{ ticketId: string; undoToken: string }>;
-    },
+    mutationFn: (vars: CreateTicketVars) =>
+      apiClient.post<{ ticketId: string; undoToken: string }>(
+        "/api/tickets",
+        vars
+      ),
     toastLabel: "Ticket created",
     invalidateKeys: [["tickets"]],
   });
