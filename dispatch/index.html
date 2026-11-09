@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Dispatch — Boolean Automations</title>
+<title>Dispatch — paintOS</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300..700;1,9..40,300..700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600;8..60,700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
@@ -103,7 +103,7 @@
     font-size: 0.7rem;
     font-weight: 600;
     letter-spacing: 0.14em;
-    text-transform: uppercase;
+    text-transform: none; /* paintOS wordmark keeps its casing */
     color: rgba(148,163,184,0.5);
     margin-bottom: 16px;
   }
@@ -281,7 +281,7 @@
     font-size: 0.62rem;
     font-weight: 600;
     letter-spacing: 0.16em;
-    text-transform: uppercase;
+    text-transform: none; /* paintOS wordmark keeps its casing */
     color: rgba(148,163,184,0.15);
   }
 
@@ -1405,7 +1405,7 @@ function LoginScreen({ onLogin }) {
   return (
     <div className="login-screen">
       <div className="login-content">
-        <div className="login-org-label">Boolean Automations</div>
+        <div className="login-org-label">paintOS</div>
         <h1 className="login-title">Dispatch</h1>
         <p className="login-subtitle">Team workload review</p>
 
@@ -1438,7 +1438,7 @@ function LoginScreen({ onLogin }) {
           </div>
         )}
       </div>
-      <div className="login-watermark">Boolean Automations</div>
+      <div className="login-watermark">paintOS</div>
     </div>
   );
 }
